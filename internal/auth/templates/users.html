@@ -1,0 +1,39 @@
+{{define "content"}}
+<h1>Пользователи</h1>
+<p class="muted">Вы вошли как <strong>{{.Current.Name}}</strong>{{if .Current.IsAdmin}} · админ{{end}} · <a href="/account">аккаунт</a> · <a href="/logout">выйти</a></p>
+
+{{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+
+<table class="users">
+  <thead><tr><th>ID</th><th>Логин</th><th>Имя</th><th>Роль</th><th></th></tr></thead>
+  <tbody>
+  {{range .Users}}
+    <tr>
+      <td>{{.ID}}</td>
+      <td>{{.Username}}</td>
+      <td>{{.Name}}</td>
+      <td>{{if .IsAdmin}}админ{{else}}пользователь{{end}}</td>
+      <td>
+        {{if ne .ID $.Current.ID}}
+          <form method="post" action="/app/users/{{.ID}}/delete" onsubmit="return confirm('Удалить {{.Username}}?')">
+            <button class="danger" type="submit">удалить</button>
+          </form>
+        {{end}}
+      </td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+
+<h2>Создать пользователя</h2>
+<form method="post" action="/app/users" class="create">
+  <label>Логин</label>
+  <input type="text" name="username" autocomplete="off" required>
+  <label>Имя</label>
+  <input type="text" name="name" autocomplete="off">
+  <label>Пароль</label>
+  <input type="password" name="password" autocomplete="new-password" required>
+  <label class="row"><input type="checkbox" name="is_admin"> администратор</label>
+  <button type="submit">Создать</button>
+</form>
+{{end}}

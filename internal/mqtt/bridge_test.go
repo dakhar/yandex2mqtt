@@ -45,10 +45,17 @@ func testDevices() []*device.Device {
 	return []*device.Device{vac, vac2}
 }
 
+// newBridge builds a bridge and loads devices via Resync (offline).
+func newBridge(devs []*device.Device, onUpdate UpdateHook) *Bridge {
+	b := New(config.MQTT{Host: "localhost", Port: 1883},
+		slog.New(slog.NewTextHandler(discardW{}, nil)), onUpdate)
+	b.Resync(devs)
+	return b
+}
+
 func TestDispatchRoutesToDevice(t *testing.T) {
 	devs := testDevices()
-	b := New(config.MQTT{Host: "localhost", Port: 1883}, devs,
-		slog.New(slog.NewTextHandler(discardW{}, nil)), nil)
+	b := newBridge(devs, nil)
 
 	// on/off state update
 	b.dispatch("vac/state", "ON")
@@ -68,11 +75,8 @@ func TestDispatchRoutesToDevice(t *testing.T) {
 }
 
 func TestDispatchCaseInsensitiveAndUnknown(t *testing.T) {
-	devs := testDevices()
 	var hookCalls int
-	b := New(config.MQTT{Host: "localhost", Port: 1883}, devs,
-		slog.New(slog.NewTextHandler(discardW{}, nil)),
-		func(*device.Device, string, bool) { hookCalls++ })
+	b := newBridge(testDevices(), func(*device.Device, string, bool) { hookCalls++ })
 
 	// Different case still routes (bridge lowercases keys).
 	b.dispatch("VAC/STATE", "ON")
@@ -87,8 +91,7 @@ func TestDispatchCaseInsensitiveAndUnknown(t *testing.T) {
 }
 
 func TestSubscriptionTablesBuilt(t *testing.T) {
-	b := New(config.MQTT{Host: "localhost", Port: 1883}, testDevices(),
-		slog.New(slog.NewTextHandler(discardW{}, nil)), nil)
+	b := newBridge(testDevices(), nil)
 
 	// Unique subscribe filters: vac/state + shared/battery/state = 2.
 	if len(b.filters) != 2 {
@@ -97,6 +100,32 @@ func TestSubscriptionTablesBuilt(t *testing.T) {
 	// The shared topic has two subscriptions.
 	if got := len(b.subs["shared/battery/state"]); got != 2 {
 		t.Fatalf("shared topic subs = %d, want 2", got)
+	}
+}
+
+// Resync (offline) must swap the device set and subscription tables, and route
+// to the new devices.
+func TestResyncSwapsDevices(t *testing.T) {
+	b := newBridge(testDevices(), nil) // Vac + Vac2, 2 filters
+
+	// Replace with a single new device on a different topic.
+	newDev := device.New(config.Device{
+		ID: "Lamp", Type: "devices.types.light",
+		MQTT:         config.MQTTMapping{Capabilities: []config.MQTTTopic{{Instance: "on", Set: "lamp/set", State: "lamp/state"}}},
+		Capabilities: []config.Capability{{Type: "devices.capabilities.on_off", Retrievable: true}},
+	}, nil, nil)
+	b.Resync([]*device.Device{newDev})
+
+	if len(b.filters) != 1 || b.filters["lamp/state"] != 0 {
+		t.Fatalf("filters after resync = %v, want {lamp/state}", b.filters)
+	}
+	if _, ok := b.subs["shared/battery/state"]; ok {
+		t.Fatalf("old subscription not cleared after resync")
+	}
+	// Routing now hits the new device.
+	b.dispatch("lamp/state", "ON")
+	if q := newDev.QueryState(); len(q.Capabilities) == 0 || q.Capabilities[0].State.Value != true {
+		t.Fatalf("new device not updated after resync: %+v", q.Capabilities)
 	}
 }
 

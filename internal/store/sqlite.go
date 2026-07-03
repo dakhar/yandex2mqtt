@@ -33,9 +33,11 @@ func Open(path string) (*sql.DB, error) {
 			return nil, fmt.Errorf("pragma %q: %w", pragma, err)
 		}
 	}
-	if _, err := db.Exec(schema); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("schema: %w", err)
+	for _, s := range []string{schema, usersSchema, catalogSchema} {
+		if _, err := db.Exec(s); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("schema: %w", err)
+		}
 	}
 	return db, nil
 }

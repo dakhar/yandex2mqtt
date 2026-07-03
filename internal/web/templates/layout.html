@@ -1,0 +1,44 @@
+{{define "layout"}}<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>yandex2mqtt</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; background: #f4f5f7; margin: 0; color: #1a1a1a; }
+    .topbar { display: flex; align-items: center; justify-content: space-between;
+              padding: 12px 20px; background: #fff; border-bottom: 1px solid #e6e8eb; }
+    .topbar .brand { font-weight: 700; }
+    .topbar a { color: #3b5bdb; text-decoration: none; margin-left: 14px; font-size: 14px; }
+    .wrap { padding: 20px; }
+    .err { background: #f8d7da; color: #842029; padding: 8px 12px; border-radius: 8px;
+           margin: 0 20px 12px; font-size: 14px; }
+    .roomform { padding: 0 20px 16px; }
+    .roomform input { padding: 8px 11px; border: 1px solid #d0d3d9; border-radius: 8px; font-size: 14px; }
+    .roomform button { padding: 8px 14px; border: 0; border-radius: 8px; background: #ffcc00;
+                       font-weight: 600; cursor: pointer; }
+    .board { display: flex; gap: 16px; padding: 0 20px 24px; overflow-x: auto; align-items: flex-start; }
+    .column { background: #eef0f3; border-radius: 12px; width: 240px; flex: 0 0 auto; }
+    .col-head { display: flex; align-items: center; justify-content: space-between;
+                padding: 10px 12px; font-weight: 600; font-size: 14px; }
+    .col-actions button { border: 0; background: transparent; cursor: pointer; font-size: 14px; color: #666; }
+    .col-actions form { display: inline; margin: 0; }
+    .column-body { min-height: 60px; padding: 6px; display: flex; flex-direction: column; gap: 8px; }
+    .card { background: #fff; border-radius: 10px; padding: 10px 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08);
+            cursor: grab; position: relative; }
+    .card-actions { position: absolute; top: 4px; right: 6px; display: flex; align-items: center; gap: 2px; }
+    .card-del { margin: 0; }
+    .card-del button { border: 0; background: transparent; color: #c8ccd2; cursor: pointer; font-size: 14px; }
+    .card-edit { color: #c8ccd2; text-decoration: none; font-size: 12px; }
+    .card:hover .card-del button, .card:hover .card-edit { color: #666; }
+    .card:hover .card-del button:hover { color: #c0392b; }
+    .newdev { margin-left: 14px; color: #3b5bdb; text-decoration: none; font-size: 14px; }
+    .card-name { font-size: 14px; font-weight: 600; }
+    .card-type { font-size: 11px; color: #8a8f98; margin-top: 2px; }
+    .card-id { font-size: 10px; color: #b3b8bf; margin-top: 2px; font-family: ui-monospace, monospace; }
+    .drag-ghost { opacity: .4; }
+  </style>
+</head>
+<body>{{template "content" .}}</body>
+</html>{{end}}

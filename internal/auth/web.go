@@ -35,12 +35,17 @@ func (m *SessionManager) Login(w http.ResponseWriter, r *http.Request) {
 	password := r.PostFormValue("password")
 	redirect := sanitizeRedirect(r.PostFormValue("redirect"))
 
-	if !m.verify(username, password) {
+	user, err := m.Authenticate(r.Context(), username, password)
+	if err != nil {
+		http.Error(w, "auth error", http.StatusInternalServerError)
+		return
+	}
+	if user == nil {
 		w.WriteHeader(http.StatusUnauthorized)
 		render(w, "login.html", map[string]any{"Redirect": redirect, "Error": "Неверный логин или пароль"})
 		return
 	}
-	if err := m.login(w, r, m.admin.ID); err != nil {
+	if err := m.login(w, r, user.ID); err != nil {
 		http.Error(w, "session error", http.StatusInternalServerError)
 		return
 	}
@@ -55,24 +60,29 @@ func (m *SessionManager) Logout(w http.ResponseWriter, r *http.Request) {
 
 // Account renders the account page, or redirects to login (GET /account).
 func (m *SessionManager) Account(w http.ResponseWriter, r *http.Request) {
-	if m.UserID(r) == "" {
+	u, err := m.CurrentUser(r.Context(), r)
+	if err != nil {
+		http.Error(w, "user lookup", http.StatusInternalServerError)
+		return
+	}
+	if u == nil {
 		http.Redirect(w, r, "/login?redirect=/account", http.StatusFound)
 		return
 	}
-	render(w, "account.html", map[string]any{"Name": m.admin.Name, "ID": m.admin.ID})
+	render(w, "account.html", map[string]any{"Name": u.Name, "ID": u.ID, "IsAdmin": u.IsAdmin})
 }
 
 // sanitizeRedirect keeps redirects local to prevent open-redirect abuse.
 func sanitizeRedirect(raw string) string {
 	if raw == "" {
-		return "/"
+		return "/app"
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.IsAbs() || u.Host != "" {
-		return "/"
+		return "/app"
 	}
-	if len(raw) == 0 || raw[0] != '/' {
-		return "/"
+	if raw[0] != '/' {
+		return "/app"
 	}
 	return raw
 }

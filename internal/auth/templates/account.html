@@ -1,5 +1,8 @@
 {{define "content"}}
 <h1>Аккаунт</h1>
-<p class="muted">Вы вошли как <strong>{{.Name}}</strong> (id {{.ID}}).</p>
-<p><a href="/logout">Выйти</a></p>
+<p class="muted">Вы вошли как <strong>{{.Name}}</strong> (id {{.ID}}){{if .IsAdmin}} · администратор{{end}}.</p>
+<p>
+  {{if .IsAdmin}}<a href="/app/users">Пользователи</a> · {{end}}
+  <a href="/logout">Выйти</a>
+</p>
 {{end}}

@@ -9,6 +9,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/caarlos0/env/v11"
 )
@@ -98,8 +99,10 @@ func Load() (*Config, error) {
 		cfg.Yandex.UserID = cfg.Admin.ID
 	}
 
+	// The device catalog file is only a seed source; once the DB is populated
+	// it becomes authoritative, so a missing file is not fatal.
 	devices, err := LoadDevices(cfg.DevicesFile)
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("load devices %q: %w", cfg.DevicesFile, err)
 	}
 	cfg.Devices = devices

@@ -1,0 +1,84 @@
+{{define "content"}}
+<div class="topbar">
+  <span class="brand">yandex2mqtt</span>
+  <span>
+    <span style="color:#8a8f98;font-size:14px">{{.User.Name}}</span>
+    <a href="/account">аккаунт</a>
+    {{if .User.IsAdmin}}<a href="/app/users">пользователи</a>{{end}}
+    <a href="/logout">выйти</a>
+  </span>
+</div>
+
+{{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+
+<form class="roomform" method="post" action="/app/rooms">
+  <input type="text" name="name" placeholder="Новая комната" autocomplete="off" required>
+  <button type="submit">Добавить комнату</button>
+  <a href="/app/devices/new" class="newdev">+ устройство</a>
+</form>
+
+<div class="board">
+  {{range .Columns}}
+  <div class="column">
+    <div class="col-head">
+      <span>{{.Name}}</span>
+      {{if .Deletable}}
+      <span class="col-actions">
+        <button title="Переименовать" onclick="renameRoom('{{.ID}}', '{{.Name}}')">✎</button>
+        <form method="post" action="/app/rooms/{{.ID}}/delete" onsubmit="return confirm('Удалить комнату «{{.Name}}»? Устройства станут без комнаты.')">
+          <button title="Удалить" style="color:#c0392b">×</button>
+        </form>
+      </span>
+      {{end}}
+    </div>
+    <div class="column-body" data-room="{{.ID}}">
+      {{range .Devices}}
+      <div class="card" data-id="{{.ID}}">
+        <div class="card-actions">
+          <a class="card-edit" href="/app/devices/{{.ID}}/edit" title="Редактировать">✎</a>
+          <form class="card-del" method="post" action="/app/devices/{{.ID}}/delete" onsubmit="return confirm('Удалить устройство «{{.Name}}»?')">
+            <button title="Удалить" type="submit">×</button>
+          </form>
+        </div>
+        <div class="card-name">{{.Name}}</div>
+        <div class="card-type">{{.Type}}</div>
+        <div class="card-id">{{.ID}}</div>
+      </div>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
+<script>
+  document.querySelectorAll('.column-body').forEach(function (col) {
+    new Sortable(col, {
+      group: 'devices',
+      animation: 150,
+      ghostClass: 'drag-ghost',
+      onEnd: function (e) {
+        fetch('/app/devices/' + encodeURIComponent(e.item.dataset.id) + '/move', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ room_id: e.to.dataset.room || '', position: e.newIndex })
+        }).catch(function () { location.reload(); });
+      }
+    });
+  });
+
+  function renameRoom(id, current) {
+    var name = prompt('Новое название комнаты', current);
+    if (!name) return;
+    var f = document.createElement('form');
+    f.method = 'post';
+    f.action = '/app/rooms/' + id + '/rename';
+    var i = document.createElement('input');
+    i.name = 'name';
+    i.value = name;
+    f.appendChild(i);
+    document.body.appendChild(f);
+    f.submit();
+  }
+</script>
+{{end}}

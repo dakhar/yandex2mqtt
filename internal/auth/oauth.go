@@ -78,12 +78,16 @@ func NewOAuth(cfg *config.Config, tokenStore oauth2.TokenStore, sm *SessionManag
 		return server.ClientFormHandler(r)
 	})
 
-	// Password grant: validate against the configured admin user.
-	srv.SetPasswordAuthorizationHandler(func(_ context.Context, _, username, password string) (string, error) {
-		if sm.verify(username, password) {
-			return sm.admin.ID, nil
+	// Password grant: validate against the users table.
+	srv.SetPasswordAuthorizationHandler(func(ctx context.Context, _, username, password string) (string, error) {
+		u, err := sm.Authenticate(ctx, username, password)
+		if err != nil {
+			return "", err
 		}
-		return "", errors.ErrInvalidGrant
+		if u == nil {
+			return "", errors.ErrInvalidGrant
+		}
+		return u.ID, nil
 	})
 
 	// Authorization-code grant: resolve the user from the login session,

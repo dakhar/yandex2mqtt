@@ -1,6 +1,7 @@
 package auth_test
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -40,7 +41,16 @@ func buildApp(t *testing.T) (*httptest.Server, string) {
 
 	cfg := testConfig()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	sm := auth.NewSessionManager(cfg.Session.Secret, cfg.Admin)
+
+	users := store.NewUserRepo(db)
+	hash, err := auth.HashPassword(cfg.Admin.Password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := users.CreateWithID(context.Background(), cfg.Admin.ID, cfg.Admin.Username, cfg.Admin.Name, hash, true); err != nil {
+		t.Fatal(err)
+	}
+	sm := auth.NewSessionManager(cfg.Session.Secret, users)
 	o := auth.NewOAuth(cfg, store.NewTokenStore(db), sm, log)
 
 	dev := device.New(config.Device{
