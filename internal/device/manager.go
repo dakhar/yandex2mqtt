@@ -15,47 +15,63 @@ type CatalogLoader interface {
 	LoadAll(ctx context.Context) ([]config.Device, error)
 }
 
-// Bridge is the MQTT side the manager drives on reload (satisfied by
-// *mqtt.Bridge): it re-subscribes to the new device set and publishes actions.
-type Bridge interface {
+// Connector links a transport (MQTT, openHAB, ...) to the device model: it
+// re-subscribes to its device set on reload and publishes actions. Each device
+// is routed to the connector named by its Transport.
+type Connector interface {
+	Transport() string
 	Resync(devices []*Device)
-	Publish(topic, payload string)
+	Publish(target, payload string)
 }
 
 // Manager owns the live device registry. It rebuilds an immutable snapshot from
 // the catalog on Reload and swaps it in atomically, so provider-API reads never
 // block on catalog edits. It satisfies the provider API's device store.
 type Manager struct {
-	loader CatalogLoader
-	bridge Bridge
-	log    *slog.Logger
-	reg    atomic.Pointer[Registry]
+	loader     CatalogLoader
+	connectors map[string]Connector
+	log        *slog.Logger
+	reg        atomic.Pointer[Registry]
 }
 
 // NewManager returns a manager with an empty registry; call Reload to populate.
-func NewManager(loader CatalogLoader, bridge Bridge, log *slog.Logger) *Manager {
+// connectors are keyed by transport name.
+func NewManager(loader CatalogLoader, connectors map[string]Connector, log *slog.Logger) *Manager {
 	if log == nil {
 		log = slog.Default()
 	}
-	m := &Manager{loader: loader, bridge: bridge, log: log}
+	m := &Manager{loader: loader, connectors: connectors, log: log}
 	m.reg.Store(NewRegistry(nil))
 	return m
 }
 
-// Reload rebuilds the registry from the catalog, wires the MQTT publisher into
-// each device, swaps the snapshot in atomically, and re-syncs subscriptions.
+// Reload rebuilds the registry from the catalog, wires each device to its
+// transport's connector (publisher + subscriptions), and swaps the snapshot in
+// atomically.
 func (m *Manager) Reload(ctx context.Context) error {
 	defs, err := m.loader.LoadAll(ctx)
 	if err != nil {
 		return err
 	}
 	devices := make([]*Device, 0, len(defs))
+	byTransport := map[string][]*Device{}
 	for _, def := range defs {
-		devices = append(devices, New(def, m.bridge.Publish, m.log))
+		d := New(def, nil, m.log)
+		if c, ok := m.connectors[d.Transport]; ok {
+			d.SetPublisher(c.Publish)
+		} else {
+			m.log.Warn("no connector for transport", "device", d.ID, "transport", d.Transport)
+		}
+		byTransport[d.Transport] = append(byTransport[d.Transport], d)
+		devices = append(devices, d)
 	}
+
 	m.reg.Store(NewRegistry(devices))
-	m.bridge.Resync(devices)
-	m.log.Info("catalog reloaded", "devices", len(devices))
+	// Re-sync every connector, even ones with no devices (clears old subs).
+	for name, c := range m.connectors {
+		c.Resync(byTransport[name])
+	}
+	m.log.Info("catalog reloaded", "devices", len(devices), "transports", len(byTransport))
 	return nil
 }
 

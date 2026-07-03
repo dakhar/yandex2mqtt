@@ -94,11 +94,8 @@ func buildTables(devices []*device.Device) (map[string][]subscription, map[strin
 	}
 	for _, d := range devices {
 		devMap[d.ID] = d
-		for _, t := range d.CapabilityTopics() {
-			add(t.State, d.ID, t.Instance, false)
-		}
-		for _, t := range d.PropertyTopics() {
-			add(t.State, d.ID, t.Instance, true)
+		for _, b := range d.StateBindings() {
+			add(b.Source, d.ID, b.Instance, b.IsProp)
 		}
 	}
 	return subs, filters, devMap
@@ -142,6 +139,9 @@ func (b *Bridge) Resync(devices []*device.Device) {
 	}
 	b.log.Info("mqtt resync", "topics", len(newFilters), "subscribed", len(toSub), "unsubscribed", len(toUnsub))
 }
+
+// Transport identifies this connector.
+func (b *Bridge) Transport() string { return "mqtt" }
 
 // Publish sends a payload to an MQTT topic. Wire this into each device via
 // Device.SetPublisher so capability actions reach the broker.

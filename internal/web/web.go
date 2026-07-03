@@ -29,10 +29,11 @@ type Reloader interface {
 
 // Handlers serves the board and room/device mutations.
 type Handlers struct {
-	rooms    *store.RoomRepo
-	catalog  *store.CatalogRepo
-	reloader Reloader
-	log      *slog.Logger
+	rooms      *store.RoomRepo
+	catalog    *store.CatalogRepo
+	reloader   Reloader
+	discoverer Discoverer // nil when openHAB isn't configured
+	log        *slog.Logger
 }
 
 // New builds the web handlers.

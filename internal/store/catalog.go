@@ -29,9 +29,19 @@ CREATE TABLE IF NOT EXISTS devices (
     name        TEXT    NOT NULL,
     type        TEXT    NOT NULL,
     description TEXT    NOT NULL DEFAULT '',
+    transport   TEXT    NOT NULL DEFAULT 'mqtt',
     position    INTEGER NOT NULL DEFAULT 0,
     updated_at  INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS openhab_bindings (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT    NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    kind      TEXT    NOT NULL,   -- 'cap' | 'prop'
+    instance  TEXT    NOT NULL,
+    item      TEXT    NOT NULL,
+    ord       INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_ohb_dev ON openhab_bindings(device_id);
 CREATE TABLE IF NOT EXISTS capabilities (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id   TEXT    NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
@@ -149,10 +159,14 @@ func insertDevice(ctx context.Context, tx *sql.Tx, userID string, d config.Devic
 // insertDeviceRow inserts the device and all its children with an explicit
 // room_id (used by the builder, which assigns an existing room by id).
 func insertDeviceRow(ctx context.Context, tx *sql.Tx, userID string, d config.Device, roomID sql.NullInt64) error {
+	transport := d.Transport
+	if transport == "" {
+		transport = "mqtt"
+	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO devices (id, user_id, room_id, name, type, description, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		d.ID, userID, roomID, d.Name, d.Type, d.Description, time.Now().Unix()); err != nil {
+		`INSERT INTO devices (id, user_id, room_id, name, type, description, transport, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.ID, userID, roomID, d.Name, d.Type, d.Description, transport, time.Now().Unix()); err != nil {
 		return err
 	}
 	return insertChildren(ctx, tx, d)
@@ -174,6 +188,13 @@ func insertChildren(ctx context.Context, tx *sql.Tx, d config.Device) error {
 	}
 	if err := insertTopics(ctx, tx, d.ID, "prop", d.MQTT.Properties); err != nil {
 		return err
+	}
+	for i, b := range d.OpenHAB {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO openhab_bindings (device_id, kind, instance, item, ord) VALUES (?, ?, ?, ?, ?)`,
+			d.ID, b.Kind, b.Instance, b.Item, i); err != nil {
+			return err
+		}
 	}
 	return insertValueMappings(ctx, tx, d.ID, d.ValueMapping)
 }

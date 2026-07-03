@@ -39,7 +39,43 @@ func Open(path string) (*sql.DB, error) {
 			return nil, fmt.Errorf("schema: %w", err)
 		}
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
 	return db, nil
+}
+
+// migrate applies additive schema changes to databases created by older
+// versions (CREATE TABLE IF NOT EXISTS does not add new columns).
+func migrate(db *sql.DB) error {
+	// devices.transport was added for multi-connector support.
+	if err := addColumnIfMissing(db, "devices", "transport", "TEXT NOT NULL DEFAULT 'mqtt'"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func addColumnIfMissing(db *sql.DB, table, column, ddl string) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return err
+		}
+		if name == column {
+			return nil // already present
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + ddl)
+	return err
 }
 
 const schema = `

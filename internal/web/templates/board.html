@@ -15,6 +15,7 @@
   <input type="text" name="name" placeholder="Новая комната" autocomplete="off" required>
   <button type="submit">Добавить комнату</button>
   <a href="/app/devices/new" class="newdev">+ устройство</a>
+  <a href="/app/discover" class="newdev">импорт из openHAB</a>
 </form>
 
 <div class="board">
@@ -35,7 +36,7 @@
       {{range .Devices}}
       <div class="card" data-id="{{.ID}}">
         <div class="card-actions">
-          <a class="card-edit" href="/app/devices/{{.ID}}/edit" title="Редактировать">✎</a>
+          {{if ne .Transport "openhab"}}<a class="card-edit" href="/app/devices/{{.ID}}/edit" title="Редактировать">✎</a>{{end}}
           <form class="card-del" method="post" action="/app/devices/{{.ID}}/delete" onsubmit="return confirm('Удалить устройство «{{.Name}}»?')">
             <button title="Удалить" type="submit">×</button>
           </form>

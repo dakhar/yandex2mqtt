@@ -12,7 +12,7 @@ import (
 // canonical config.Device shape the rest of the system uses.
 func (r *CatalogRepo) LoadAll(ctx context.Context) ([]config.Device, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT d.id, d.user_id, COALESCE(rm.name, ''), d.name, d.type, d.description
+		SELECT d.id, d.user_id, COALESCE(rm.name, ''), d.name, d.type, d.description, d.transport
 		FROM devices d
 		LEFT JOIN rooms rm ON rm.id = d.room_id
 		ORDER BY d.position, d.id`)
@@ -25,7 +25,7 @@ func (r *CatalogRepo) LoadAll(ctx context.Context) ([]config.Device, error) {
 	for rows.Next() {
 		var d config.Device
 		var userID string
-		if err := rows.Scan(&d.ID, &userID, &d.Room, &d.Name, &d.Type, &d.Description); err != nil {
+		if err := rows.Scan(&d.ID, &userID, &d.Room, &d.Name, &d.Type, &d.Description, &d.Transport); err != nil {
 			return nil, err
 		}
 		d.AllowedUsers = []string{userID}
@@ -52,8 +52,29 @@ func (r *CatalogRepo) LoadAll(ctx context.Context) ([]config.Device, error) {
 		if devices[i].ValueMapping, err = r.loadValueMappings(ctx, id); err != nil {
 			return nil, err
 		}
+		if devices[i].OpenHAB, err = r.loadOpenHABBindings(ctx, id); err != nil {
+			return nil, err
+		}
 	}
 	return devices, nil
+}
+
+func (r *CatalogRepo) loadOpenHABBindings(ctx context.Context, deviceID string) ([]config.OpenHABBinding, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT kind, instance, item FROM openhab_bindings WHERE device_id = ? ORDER BY ord, id`, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []config.OpenHABBinding
+	for rows.Next() {
+		var b config.OpenHABBinding
+		if err := rows.Scan(&b.Kind, &b.Instance, &b.Item); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
 }
 
 // GetDevice assembles a single device owned by userID, returning its room id
@@ -62,10 +83,10 @@ func (r *CatalogRepo) GetDevice(ctx context.Context, userID, id string) (config.
 	var d config.Device
 	var roomID string
 	err := r.db.QueryRowContext(ctx, `
-		SELECT d.id, COALESCE(rm.name, ''), COALESCE(CAST(d.room_id AS TEXT), ''), d.name, d.type, d.description
+		SELECT d.id, COALESCE(rm.name, ''), COALESCE(CAST(d.room_id AS TEXT), ''), d.name, d.type, d.description, d.transport
 		FROM devices d LEFT JOIN rooms rm ON rm.id = d.room_id
 		WHERE d.id = ? AND d.user_id = ?`, id, userID).
-		Scan(&d.ID, &d.Room, &roomID, &d.Name, &d.Type, &d.Description)
+		Scan(&d.ID, &d.Room, &roomID, &d.Name, &d.Type, &d.Description, &d.Transport)
 	if err == sql.ErrNoRows {
 		return config.Device{}, "", false, nil
 	}
@@ -73,6 +94,9 @@ func (r *CatalogRepo) GetDevice(ctx context.Context, userID, id string) (config.
 		return config.Device{}, "", false, err
 	}
 	d.AllowedUsers = []string{userID}
+	if d.OpenHAB, err = r.loadOpenHABBindings(ctx, id); err != nil {
+		return config.Device{}, "", false, err
+	}
 	if d.Capabilities, err = r.loadCapProps(ctx, "capabilities", id); err != nil {
 		return config.Device{}, "", false, err
 	}

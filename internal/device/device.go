@@ -25,6 +25,7 @@ type Device struct {
 	Description  string
 	Room         string
 	Type         string
+	Transport    string // "mqtt" (default) | "openhab"
 	AllowedUsers []string
 
 	mqtt         config.MQTTMapping
@@ -32,6 +33,10 @@ type Device struct {
 
 	capabilities []*capState
 	properties   []*propState
+
+	// Transport-agnostic wiring (built from MQTT topics or openHAB items).
+	cmdTarget     map[string]string // instance -> command target (topic/item)
+	stateBindings []StateBinding
 
 	publish PublishFunc
 	log     *slog.Logger
@@ -59,12 +64,17 @@ func New(c config.Device, publish PublishFunc, log *slog.Logger) *Device {
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(discard{}, nil))
 	}
+	transport := c.Transport
+	if transport == "" {
+		transport = "mqtt"
+	}
 	d := &Device{
 		ID:           c.ID,
 		Name:         c.Name,
 		Description:  c.Description,
 		Room:         c.Room,
 		Type:         c.Type,
+		Transport:    transport,
 		AllowedUsers: c.AllowedUsers,
 		mqtt:         c.MQTT,
 		valueMapping: c.ValueMapping,
@@ -92,6 +102,7 @@ func New(c config.Device, publish PublishFunc, log *slog.Logger) *Device {
 			cur:         initState(p.Type, p.Parameters),
 		})
 	}
+	d.buildBindings(c)
 	return d
 }
 
@@ -187,9 +198,9 @@ func (d *Device) SetCapabilityState(val any, capType, instance string, relative 
 	if cap == nil {
 		return actionErr(capType, instance, "INVALID_ACTION", "capability not found")
 	}
-	topic := d.capTopic(instance)
-	if topic == "" {
-		return actionErr(capType, instance, "INVALID_ACTION", "no set topic for instance")
+	target := d.cmdTarget[instance]
+	if target == "" {
+		return actionErr(capType, instance, "INVALID_ACTION", "no command binding for instance")
 	}
 
 	cap.cur = &State{Instance: instance, Value: value}
@@ -206,7 +217,7 @@ func (d *Device) SetCapabilityState(val any, capType, instance string, relative 
 	}
 
 	if d.publish != nil {
-		d.publish(topic, message)
+		d.publish(target, message)
 	}
 	return ActionCapResult{
 		Type:  capType,
@@ -304,20 +315,47 @@ func (d *Device) findPropByInstance(instance string) *propState {
 // (the bridge needs the devices before it can offer a publisher).
 func (d *Device) SetPublisher(p PublishFunc) { d.publish = p }
 
-// capTopic returns the MQTT "set" topic for a capability instance.
-func (d *Device) capTopic(instance string) string {
-	for _, t := range d.mqtt.Capabilities {
-		if t.Instance == instance {
-			return t.Set
-		}
-	}
-	return ""
+// StateBinding ties a capability/property instance to its external state source
+// (an MQTT state topic or an openHAB item), for connectors to subscribe to.
+type StateBinding struct {
+	Instance string
+	Source   string
+	IsProp   bool
 }
 
-// CapabilityTopics / PropertyTopics expose the MQTT state-topic subscriptions
-// for the bridge (step 3).
-func (d *Device) CapabilityTopics() []config.MQTTTopic { return d.mqtt.Capabilities }
-func (d *Device) PropertyTopics() []config.MQTTTopic   { return d.mqtt.Properties }
+// StateBindings returns the device's inbound state sources (transport-agnostic).
+func (d *Device) StateBindings() []StateBinding { return d.stateBindings }
+
+// buildBindings populates the transport-agnostic command targets and state
+// bindings from the device's MQTT topics or openHAB items.
+func (d *Device) buildBindings(c config.Device) {
+	d.cmdTarget = map[string]string{}
+	if d.Transport == "openhab" {
+		for _, b := range c.OpenHAB {
+			if b.Kind == "prop" {
+				d.stateBindings = append(d.stateBindings, StateBinding{Instance: b.Instance, Source: b.Item, IsProp: true})
+				continue
+			}
+			d.cmdTarget[b.Instance] = b.Item
+			d.stateBindings = append(d.stateBindings, StateBinding{Instance: b.Instance, Source: b.Item, IsProp: false})
+		}
+		return
+	}
+	// mqtt (default)
+	for _, t := range c.MQTT.Capabilities {
+		if t.Set != "" {
+			d.cmdTarget[t.Instance] = t.Set
+		}
+		if t.State != "" {
+			d.stateBindings = append(d.stateBindings, StateBinding{Instance: t.Instance, Source: t.State, IsProp: false})
+		}
+	}
+	for _, t := range c.MQTT.Properties {
+		if t.State != "" {
+			d.stateBindings = append(d.stateBindings, StateBinding{Instance: t.Instance, Source: t.State, IsProp: true})
+		}
+	}
+}
 
 // --- helpers ---
 

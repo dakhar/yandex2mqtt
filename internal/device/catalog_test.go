@@ -28,8 +28,7 @@ func TestRealCatalogConstructs(t *testing.T) {
 		}
 		// Exercise query + subscription extraction on every device.
 		_ = d.QueryState()
-		_ = d.CapabilityTopics()
-		_ = d.PropertyTopics()
+		_ = d.StateBindings()
 	}
 	t.Logf("constructed %d devices from real catalog", len(devs))
 }

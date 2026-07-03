@@ -106,17 +106,18 @@ func (r *RoomRepo) BelongsToUser(ctx context.Context, userID, id string) (bool, 
 
 // BoardDevice is the lightweight device view for the board.
 type BoardDevice struct {
-	ID       string
-	Name     string
-	Type     string
-	RoomID   string // "" = unassigned
-	Position int
+	ID        string
+	Name      string
+	Type      string
+	RoomID    string // "" = unassigned
+	Position  int
+	Transport string
 }
 
 // ListDevicesForUser returns the user's devices with their room assignment.
 func (r *CatalogRepo) ListDevicesForUser(ctx context.Context, userID string) ([]BoardDevice, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, name, type, room_id, position FROM devices WHERE user_id = ? ORDER BY position, id`, userID)
+		`SELECT id, name, type, room_id, position, transport FROM devices WHERE user_id = ? ORDER BY position, id`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +126,7 @@ func (r *CatalogRepo) ListDevicesForUser(ctx context.Context, userID string) ([]
 	for rows.Next() {
 		var d BoardDevice
 		var roomID sql.NullInt64
-		if err := rows.Scan(&d.ID, &d.Name, &d.Type, &roomID, &d.Position); err != nil {
+		if err := rows.Scan(&d.ID, &d.Name, &d.Type, &roomID, &d.Position, &d.Transport); err != nil {
 			return nil, err
 		}
 		if roomID.Valid {

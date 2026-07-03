@@ -12,16 +12,27 @@ import (
 // such as "on" MUST be quoted in YAML, otherwise YAML 1.1 parses them as
 // booleans.
 type Device struct {
-	ID           string         `yaml:"id"`
-	Name         string         `yaml:"name"`
-	Description  string         `yaml:"description,omitempty"`
-	Room         string         `yaml:"room"`
-	Type         string         `yaml:"type"`
-	AllowedUsers []string       `yaml:"allowedUsers"`
+	ID           string   `yaml:"id"`
+	Name         string   `yaml:"name"`
+	Description  string   `yaml:"description,omitempty"`
+	Room         string   `yaml:"room"`
+	Type         string   `yaml:"type"`
+	AllowedUsers []string `yaml:"allowedUsers"`
+	// Transport selects the connector: "mqtt" (default) or "openhab".
+	Transport    string         `yaml:"transport,omitempty"`
 	MQTT         MQTTMapping    `yaml:"mqtt"`
 	ValueMapping []ValueMapping `yaml:"valueMapping,omitempty"`
 	Capabilities []Capability   `yaml:"capabilities,omitempty"`
 	Properties   []Property     `yaml:"properties,omitempty"`
+	// OpenHAB holds per-instance item bindings when Transport == "openhab".
+	OpenHAB []OpenHABBinding `yaml:"openhab,omitempty"`
+}
+
+// OpenHABBinding ties a capability/property instance to an openHAB item.
+type OpenHABBinding struct {
+	Kind     string `yaml:"kind"` // "cap" | "prop"
+	Instance string `yaml:"instance"`
+	Item     string `yaml:"item"`
 }
 
 // MQTTMapping ties Yandex instances to MQTT topics.

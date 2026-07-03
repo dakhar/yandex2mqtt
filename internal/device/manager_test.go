@@ -17,8 +17,9 @@ type fakeBridge struct {
 	publishC int
 }
 
-func (b *fakeBridge) Resync(devices []*Device)      { b.resyncs++; b.lastN = len(devices) }
-func (b *fakeBridge) Publish(topic, payload string) { b.publishC++ }
+func (b *fakeBridge) Transport() string              { return "mqtt" }
+func (b *fakeBridge) Resync(devices []*Device)       { b.resyncs++; b.lastN = len(devices) }
+func (b *fakeBridge) Publish(target, payload string) { b.publishC++ }
 
 func dev(id, user string) config.Device {
 	return config.Device{
@@ -31,7 +32,7 @@ func dev(id, user string) config.Device {
 func TestManagerReloadAndSwap(t *testing.T) {
 	loader := &fakeLoader{devices: []config.Device{dev("A", "1"), dev("B", "2")}}
 	bridge := &fakeBridge{}
-	m := NewManager(loader, bridge, nil)
+	m := NewManager(loader, map[string]Connector{"mqtt": bridge}, nil)
 
 	// Before reload: empty.
 	if len(m.All()) != 0 {
@@ -72,5 +73,48 @@ func TestManagerReloadAndSwap(t *testing.T) {
 	d.SetCapabilityState(true, "devices.capabilities.on_off", "on", false)
 	if bridge.publishC == 0 {
 		t.Fatalf("expected publish through wired bridge")
+	}
+}
+
+// Devices are routed to the connector named by their Transport; an unknown
+// transport leaves the device in the registry but unwired.
+func TestManagerRoutesByTransport(t *testing.T) {
+	a := dev("A", "1") // default transport -> mqtt
+	b := dev("B", "1")
+	b.Transport = "openhab"
+	b.OpenHAB = []config.OpenHABBinding{{Kind: "cap", Instance: "on", Item: "B_Switch"}}
+	c := dev("C", "1")
+	c.Transport = "zigbee" // no connector registered
+
+	mq := &fakeBridge{}
+	oh := &fakeBridge{}
+	m := NewManager(&fakeLoader{devices: []config.Device{a, b, c}},
+		map[string]Connector{"mqtt": mq, "openhab": oh}, nil)
+	if err := m.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if mq.lastN != 1 || oh.lastN != 1 {
+		t.Fatalf("routing: mqtt=%d openhab=%d, want 1/1", mq.lastN, oh.lastN)
+	}
+	// All three are queryable regardless of connector.
+	if len(m.All()) != 3 {
+		t.Fatalf("registry has %d devices, want 3", len(m.All()))
+	}
+
+	// A publishes via the mqtt connector, B via openhab.
+	da, _ := m.ByID("A")
+	da.SetCapabilityState(true, "devices.capabilities.on_off", "on", false)
+	db, _ := m.ByID("B")
+	db.SetCapabilityState(true, "devices.capabilities.on_off", "on", false)
+	if mq.publishC != 1 || oh.publishC != 1 {
+		t.Fatalf("publish routing: mqtt=%d openhab=%d, want 1/1", mq.publishC, oh.publishC)
+	}
+
+	// C has no connector: publishing is a no-op (no panic, no wrong connector).
+	dc, _ := m.ByID("C")
+	dc.SetCapabilityState(true, "devices.capabilities.on_off", "on", false)
+	if mq.publishC != 1 || oh.publishC != 1 {
+		t.Fatalf("unwired device must not publish anywhere")
 	}
 }

@@ -10,6 +10,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/caarlos0/env/v11"
 )
@@ -22,6 +23,7 @@ type Config struct {
 	Admin   Admin
 	OAuth   OAuthClient
 	Yandex  Yandex
+	OpenHAB OpenHAB
 
 	DBPath      string `env:"DB_PATH" envDefault:"./data/yandex2mqtt.db"`
 	DevicesFile string `env:"DEVICES_FILE" envDefault:"./data/devices.yaml"`
@@ -85,6 +87,17 @@ func (c *Config) NotificationEnabled() bool {
 	return c.Yandex.SkillID != "" && c.Yandex.OAuthToken != ""
 }
 
+// OpenHAB is the openHAB connector configuration. The API token is read from
+// TokenFile (preferred, so it can be a mounted secret) or Token directly.
+type OpenHAB struct {
+	URL       string `env:"OPENHAB_URL"`
+	Token     string `env:"OPENHAB_TOKEN"`
+	TokenFile string `env:"OPENHAB_TOKEN_FILE"`
+}
+
+// Enabled reports whether the openHAB connector should run.
+func (o OpenHAB) Enabled() bool { return o.URL != "" && o.Token != "" }
+
 // Load reads configuration from the environment and the device catalog file,
 // then validates it. It fails fast so misconfiguration is caught at startup
 // rather than at request time.
@@ -97,6 +110,15 @@ func Load() (*Config, error) {
 	// Default the notification user to the admin user.
 	if cfg.Yandex.UserID == "" {
 		cfg.Yandex.UserID = cfg.Admin.ID
+	}
+
+	// Load the openHAB API token from its file if given.
+	if cfg.OpenHAB.Token == "" && cfg.OpenHAB.TokenFile != "" {
+		b, err := os.ReadFile(cfg.OpenHAB.TokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("read openhab token file %q: %w", cfg.OpenHAB.TokenFile, err)
+		}
+		cfg.OpenHAB.Token = strings.TrimSpace(string(b))
 	}
 
 	// The device catalog file is only a seed source; once the DB is populated

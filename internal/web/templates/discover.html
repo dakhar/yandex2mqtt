@@ -1,0 +1,50 @@
+{{define "content"}}
+<div class="topbar">
+  <span class="brand">yandex2mqtt · импорт из openHAB</span>
+  <span><a href="/app">← к доске</a> <a href="/logout">выйти</a></span>
+</div>
+
+<div class="wrap">
+  {{if .NotConfigured}}
+    <p class="muted">openHAB не настроен. Задай <code>OPENHAB_URL</code> и <code>OPENHAB_TOKEN_FILE</code>.</p>
+  {{else if .Error}}
+    <div class="err">Не удалось прочитать openHAB: {{.Error}}</div>
+  {{else if not .Drafts}}
+    <p class="muted">Нет items с тегом <code>ya2mqtt</code>. Повесь тег на нужные items в openHAB и обнови страницу.</p>
+  {{else}}
+    <p class="muted">Найдены items с тегом <code>ya2mqtt</code>. Тип и умения определены автоматически — добавь нужные.</p>
+    <table class="users">
+      <thead><tr><th>Item</th><th>Название</th><th>Тип</th><th>Умения / свойства</th><th></th></tr></thead>
+      <tbody>
+      {{range .Drafts}}
+        <tr>
+          <td><code>{{.Item}}</code></td>
+          <td>{{.Name}}</td>
+          <td>{{.Type}}</td>
+          <td>
+            {{range .Capabilities}}<span class="chip">{{.}}</span>{{end}}
+            {{range .Properties}}<span class="chip chip-prop">{{.}}</span>{{end}}
+          </td>
+          <td>
+            <form method="post" action="/app/discover/add">
+              <input type="hidden" name="item" value="{{.Item}}">
+              <button type="submit">Добавить</button>
+            </form>
+          </td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  {{end}}
+</div>
+
+<style>
+  .wrap { padding: 20px; }
+  .wrap code { background:#eef0f3; padding:1px 5px; border-radius:4px; font-size:13px; }
+  .chip { display:inline-block; background:#eef0f3; color:#3b5bdb; border-radius:6px;
+          padding:2px 8px; font-size:12px; margin:2px 3px 2px 0; }
+  .chip-prop { color:#2b8a3e; background:#ebfbee; }
+  .wrap table.users td form { margin:0; }
+  .wrap table.users button { background:#ffcc00; border:0; border-radius:8px; padding:6px 12px; cursor:pointer; font-weight:600; }
+</style>
+{{end}}
