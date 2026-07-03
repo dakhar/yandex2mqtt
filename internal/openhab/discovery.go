@@ -10,15 +10,15 @@ import (
 	"github.com/dakhar/yandex2mqtt/internal/config"
 )
 
-// DiscoveryTag is the openHAB item tag that marks an item for export to Yandex.
+// DiscoveryTag is the default openHAB item tag used to filter discovery.
 const DiscoveryTag = "ya2mqtt"
 
 type ohItem struct {
-	Name    string   `json:"name"`
-	Type    string   `json:"type"`
-	Label   string   `json:"label"`
-	Tags    []string `json:"tags"`
-	Members []ohItem `json:"members"` // populated for Group items
+	Name       string   `json:"name"`
+	Type       string   `json:"type"`
+	Label      string   `json:"label"`
+	Tags       []string `json:"tags"`
+	GroupNames []string `json:"groupNames"` // parent groups (openHAB semantic hierarchy)
 }
 
 // feature is one capability or property inferred from an item, with the item it
@@ -31,42 +31,99 @@ type feature struct {
 	item     string
 }
 
-// Discover reads items tagged ya2mqtt and returns device drafts. Group items
-// (openHAB Equipment) become composite devices built from their member Points;
-// plain items become single devices.
-func (c *Connector) Discover(ctx context.Context) ([]config.Device, error) {
+// Discover reads the openHAB item model and returns device drafts. tag, when
+// non-empty, restricts which items/equipment are exposed (empty = all items).
+func (c *Connector) Discover(ctx context.Context, tag string) ([]config.Device, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	var items []ohItem
-	if err := c.getJSON(ctx, "/rest/items?tags="+DiscoveryTag+"&fields=name,type,label,tags", &items); err != nil {
+	if err := c.getJSON(ctx, "/rest/items?fields=name,type,label,tags,groupNames", &items); err != nil {
 		return nil, err
 	}
-	var drafts []config.Device
-	for _, it := range items {
-		if it.Type == "Group" {
-			members, err := c.groupMembers(ctx, it.Name)
-			if err != nil {
-				c.log.Warn("openhab group members", "group", it.Name, "err", err)
-				continue
-			}
-			if d, ok := draftForGroup(it, members); ok {
-				drafts = append(drafts, d)
-			}
-			continue
-		}
-		if d, ok := draftForItem(it); ok {
-			drafts = append(drafts, d)
-		}
-	}
-	return drafts, nil
+	return inferDevices(items, tag), nil
 }
 
-func (c *Connector) groupMembers(ctx context.Context, name string) ([]ohItem, error) {
-	var g ohItem
-	if err := c.getJSON(ctx, "/rest/items/"+name, &g); err != nil {
-		return nil, err
+// inferDevices walks the openHAB semantic hierarchy (Location -> Equipment ->
+// Point) to produce device drafts:
+//   - Equipment groups become one composite device (member Points -> features).
+//   - Any other item (including members of non-Equipment groups) becomes its own
+//     device.
+//   - A Location ancestor sets the device's room.
+//
+// Only items matching tag (or all, when tag is empty) are exposed.
+func inferDevices(items []ohItem, tag string) []config.Device {
+	byName := make(map[string]ohItem, len(items))
+	children := map[string][]ohItem{}
+	locName := map[string]string{} // Location group name -> room label
+	for _, it := range items {
+		byName[it.Name] = it
+		for _, g := range it.GroupNames {
+			children[g] = append(children[g], it)
+		}
+		if it.Type == "Group" && isLocation(it.Tags) {
+			locName[it.Name] = itemLabel(it)
+		}
 	}
-	return g.Members, nil
+	roomOf := func(it ohItem) string { return resolveRoom(it, byName, locName) }
+	candidate := func(it ohItem) bool { return tag == "" || hasTag(it.Tags, tag) }
+
+	consumed := map[string]bool{}
+	var drafts []config.Device
+
+	// Pass 1: Equipment groups -> composite devices; members are consumed.
+	for _, it := range items {
+		if it.Type != "Group" || equipmentType(it.Tags) == "" || !candidate(it) {
+			continue
+		}
+		d, ok := draftForGroup(it, children[it.Name])
+		if !ok {
+			continue
+		}
+		d.Room = roomOf(it)
+		drafts = append(drafts, d)
+		for _, m := range children[it.Name] {
+			consumed[m.Name] = true
+		}
+	}
+
+	// Pass 2: everything else (standalone items and members of non-Equipment
+	// groups) -> its own device.
+	for _, it := range items {
+		if it.Type == "Group" || consumed[it.Name] || !candidate(it) {
+			continue
+		}
+		d, ok := draftForItem(it)
+		if !ok {
+			continue
+		}
+		d.Room = roomOf(it)
+		drafts = append(drafts, d)
+	}
+	return drafts
+}
+
+// resolveRoom walks an item's parent groups to the first Location ancestor.
+func resolveRoom(it ohItem, byName map[string]ohItem, locName map[string]string) string {
+	seen := map[string]bool{}
+	var walk func(names []string) string
+	walk = func(names []string) string {
+		for _, g := range names {
+			if seen[g] {
+				continue
+			}
+			seen[g] = true
+			if r, ok := locName[g]; ok {
+				return r
+			}
+			if parent, ok := byName[g]; ok {
+				if r := walk(parent.GroupNames); r != "" {
+					return r
+				}
+			}
+		}
+		return ""
+	}
+	return walk(it.GroupNames)
 }
 
 func (c *Connector) getJSON(ctx context.Context, path string, v any) error {
@@ -95,17 +152,19 @@ func draftForItem(it ohItem) (config.Device, bool) {
 	return assemble(itemLabel(it), dtype, feats), true
 }
 
-// draftForGroup builds one composite device from a Group's member Points,
-// de-duplicating capabilities/properties by instance (first member wins).
+// draftForGroup builds one composite device from an Equipment group: its member
+// Points become capabilities/properties (de-duplicated by instance). The device
+// type comes from the group's Equipment tag; a group without a suitable
+// Equipment tag or with no mappable members is not a device.
 func draftForGroup(g ohItem, members []ohItem) (config.Device, bool) {
+	dtype := equipmentType(g.Tags)
+	if dtype == "" {
+		return config.Device{}, false
+	}
 	var feats []feature
 	seen := map[string]bool{}
-	fallbackType := ""
 	for _, m := range members {
-		mf, mt := featuresForItem(m)
-		if fallbackType == "" && mt != "" {
-			fallbackType = mt
-		}
+		mf, _ := featuresForItem(m)
 		for _, f := range mf {
 			key := f.kind + "|" + f.instance
 			if seen[key] {
@@ -117,13 +176,6 @@ func draftForGroup(g ohItem, members []ohItem) (config.Device, bool) {
 	}
 	if len(feats) == 0 {
 		return config.Device{}, false
-	}
-	dtype := equipmentType(g.Tags)
-	if dtype == "" {
-		dtype = fallbackType
-	}
-	if dtype == "" {
-		dtype = "devices.types.other"
 	}
 	return assemble(itemLabel(g), dtype, feats), true
 }

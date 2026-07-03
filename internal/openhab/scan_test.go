@@ -1,7 +1,6 @@
 package openhab
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -13,10 +12,9 @@ import (
 	"github.com/dakhar/yandex2mqtt/internal/device"
 )
 
-// TestScanAllItems runs the discovery inference over EVERY item in a live
-// openHAB and reports coverage: which types import, which are skipped, and any
-// drafts that would fail Yandex validation. Guarded by OH_SCAN_URL so normal
-// test runs skip it.
+// TestScanAllItems runs the full discovery inference over a live openHAB and
+// reports how many devices it would produce, their Yandex types, room coverage,
+// and any drafts that would fail validation. Guarded by OH_SCAN_URL.
 //
 //	OH_SCAN_URL=http://host:8080 OH_SCAN_TOKEN_FILE=/path/token \
 //	  ./scan.test -test.run TestScanAllItems -test.v
@@ -34,11 +32,7 @@ func TestScanAllItems(t *testing.T) {
 		token = strings.TrimSpace(string(b))
 	}
 
-	c := NewConnector(config.OpenHAB{URL: url, Token: token}, discardLog(), nil)
-	defer c.Close()
-	ctx := context.Background()
-
-	req, _ := http.NewRequest(http.MethodGet, strings.TrimRight(url, "/")+"/rest/items?fields=name,type,label,tags", nil)
+	req, _ := http.NewRequest(http.MethodGet, strings.TrimRight(url, "/")+"/rest/items?fields=name,type,label,tags,groupNames", nil)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -52,80 +46,46 @@ func TestScanAllItems(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	typeCount := map[string]int{}  // openHAB item type -> count
-	skipped := map[string]int{}    // skipped openHAB type -> count
-	yandexType := map[string]int{} // resulting Yandex device type -> count
-	numberSkips := []string{}      // Number items we couldn't classify
-	var validationFails []string   // draft -> first validation error
-	inferred := 0
+	// No tag filter -> consider all items.
+	devices := inferDevices(items, "")
 
+	typeCount := map[string]int{}
 	for _, it := range items {
 		typeCount[it.Type]++
-		var (
-			d  config.Device
-			ok bool
-		)
-		if it.Type == "Group" {
-			members, err := c.groupMembers(ctx, it.Name)
-			if err == nil {
-				d, ok = draftForGroup(it, members)
-			}
-		} else {
-			d, ok = draftForItem(it)
-		}
-		if !ok {
-			skipped[it.Type]++
-			base, _, _ := strings.Cut(it.Type, ":")
-			if base == "Number" {
-				numberSkips = append(numberSkips, it.Name+" tags="+strings.Join(it.Tags, ","))
-			}
-			continue
-		}
-		inferred++
+	}
+	yandexType := map[string]int{}
+	roomed := 0
+	var fails []string
+	for _, d := range devices {
 		yandexType[d.Type]++
+		if d.Room != "" {
+			roomed++
+		}
 		d.ID = "scan"
 		if errs, _ := device.ValidateCatalog([]config.Device{d}); len(errs) > 0 {
-			validationFails = append(validationFails, it.Name+" ("+it.Type+"): "+errs[0].Error())
+			fails = append(fails, d.Name+": "+errs[0].Error())
 		}
 	}
 
-	t.Logf("=== openHAB scan: %d items total ===", len(items))
-	t.Logf("inferable: %d, skipped: %d", inferred, len(items)-inferred)
+	t.Logf("=== openHAB scan: %d items -> %d devices ===", len(items), len(devices))
+	t.Logf("devices with a room: %d", roomed)
 
 	t.Logf("--- item types (openHAB) ---")
 	for _, kv := range sortedCounts(typeCount) {
-		mark := ""
-		if skipped[kv.k] == kv.v && kv.v > 0 {
-			mark = "  [SKIPPED — not exported]"
-		} else if skipped[kv.k] > 0 {
-			mark = "  [partially skipped]"
-		}
-		t.Logf("  %-22s %d%s", kv.k, kv.v, mark)
+		t.Logf("  %-22s %d", kv.k, kv.v)
 	}
-
 	t.Logf("--- resulting Yandex device types ---")
 	for _, kv := range sortedCounts(yandexType) {
 		t.Logf("  %-34s %d", kv.k, kv.v)
 	}
 
-	if len(numberSkips) > 0 {
-		t.Logf("--- Number items skipped (no recognized dimension/tag) : %d ---", len(numberSkips))
-		for i, s := range numberSkips {
-			if i >= 15 {
-				t.Logf("  ... and %d more", len(numberSkips)-15)
-				break
-			}
-			t.Logf("  %s", s)
-		}
-	}
-
-	if len(validationFails) > 0 {
-		t.Errorf("--- %d drafts FAILED validation ---", len(validationFails))
-		for _, s := range validationFails {
+	if len(fails) > 0 {
+		t.Errorf("--- %d drafts FAILED validation ---", len(fails))
+		for _, s := range fails {
 			t.Errorf("  %s", s)
 		}
 	} else {
-		t.Logf("all inferred drafts pass Yandex validation ✓")
+		t.Logf("all %d device drafts pass Yandex validation", len(devices))
 	}
 }
 

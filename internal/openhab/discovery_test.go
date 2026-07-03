@@ -183,27 +183,96 @@ func TestEquipmentTypeMapping(t *testing.T) {
 	}
 }
 
-func TestDiscoverReadsTaggedItems(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("tags") != DiscoveryTag {
-			t.Errorf("missing tags filter: %s", r.URL.RawQuery)
-		}
+func serveItems(t *testing.T, jsonBody string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`[{"name":"Light_Kitchen","type":"Dimmer","label":"Свет кухня","tags":["ya2mqtt","Light"]},
-			{"name":"Ignore","type":"String","tags":["ya2mqtt"]}]`))
+		w.Write([]byte(jsonBody))
 	}))
-	defer srv.Close()
+}
 
+func TestDiscoverTagFilter(t *testing.T) {
+	srv := serveItems(t, `[
+		{"name":"Light_Kitchen","type":"Dimmer","label":"Свет кухня","tags":["ya2mqtt","Light"]},
+		{"name":"Ignore","type":"String","tags":["ya2mqtt"]},
+		{"name":"Untagged","type":"Switch","tags":[]}
+	]`)
+	defer srv.Close()
 	c := NewConnector(config.OpenHAB{URL: srv.URL, Token: "t"}, discardLog(), nil)
 	defer c.Close()
-	drafts, err := c.Discover(context.Background())
+
+	// With a tag, only tagged & inferable items (Dimmer) are exposed.
+	drafts, err := c.Discover(context.Background(), "ya2mqtt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(drafts) != 1 || drafts[0].Name != "Свет кухня" || len(drafts[0].Capabilities) != 2 {
+		t.Fatalf("tagged discover: %+v", drafts)
+	}
+
+	// Without a tag, all inferable items (Dimmer + untagged Switch) are exposed.
+	all, _ := c.Discover(context.Background(), "")
+	if len(all) != 2 {
+		t.Fatalf("untagged discover: want 2, got %d", len(all))
+	}
+}
+
+// An Equipment group and its member yield ONE composite device (member consumed
+// via the groupNames hierarchy, not duplicated as a standalone).
+func TestDiscoverGroupDedup(t *testing.T) {
+	srv := serveItems(t, `[
+		{"name":"Light_Kitchen","type":"Group","label":"Свет кухня","tags":["ya2mqtt","Lightbulb"]},
+		{"name":"LK_Switch","type":"Switch","tags":["ya2mqtt","Point"],"groupNames":["Light_Kitchen"]},
+		{"name":"LK_Dim","type":"Dimmer","tags":["Point"],"groupNames":["Light_Kitchen"]}
+	]`)
+	defer srv.Close()
+	c := NewConnector(config.OpenHAB{URL: srv.URL, Token: "t"}, discardLog(), nil)
+	defer c.Close()
+
+	drafts, err := c.Discover(context.Background(), "ya2mqtt")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(drafts) != 1 {
-		t.Fatalf("want 1 draft (String skipped), got %d", len(drafts))
+		t.Fatalf("want 1 composite (member consumed), got %d: %+v", len(drafts), drafts)
 	}
-	if drafts[0].Name != "Свет кухня" || len(drafts[0].Capabilities) != 2 {
-		t.Fatalf("unexpected draft: %+v", drafts[0])
+	if d := drafts[0]; d.Type != "devices.types.light" || len(d.Capabilities) != 2 {
+		t.Fatalf("composite: type=%q caps=%d", d.Type, len(d.Capabilities))
+	}
+}
+
+// Location groups become rooms; non-Equipment group members become standalone
+// devices; both inherit the room from their Location ancestor.
+func TestDiscoverRoomsAndStandalone(t *testing.T) {
+	srv := serveItems(t, `[
+		{"name":"Kitchen","type":"Group","label":"Кухня","tags":["Kitchen"]},
+		{"name":"KLight","type":"Group","tags":["Lightbulb"],"groupNames":["Kitchen"]},
+		{"name":"KLight_Sw","type":"Switch","tags":["Point"],"groupNames":["KLight"]},
+		{"name":"KFanGroup","type":"Group","tags":["gFan"],"groupNames":["Kitchen"]},
+		{"name":"KFan_Sw","type":"Switch","tags":["Point"],"groupNames":["KFanGroup"]}
+	]`)
+	defer srv.Close()
+	c := NewConnector(config.OpenHAB{URL: srv.URL, Token: "t"}, discardLog(), nil)
+	defer c.Close()
+
+	drafts, err := c.Discover(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]config.Device{}
+	for _, d := range drafts {
+		byName[d.Name] = d
+	}
+	// Equipment KLight -> composite light in Кухня; KFan_Sw (member of a
+	// non-Equipment group) -> standalone switch in Кухня. Kitchen/KFanGroup are
+	// not devices.
+	if len(drafts) != 2 {
+		t.Fatalf("want 2 devices, got %d: %v", len(drafts), drafts)
+	}
+	if d, ok := byName["KLight"]; !ok || d.Type != "devices.types.light" || d.Room != "Кухня" {
+		t.Fatalf("equipment device: %+v", d)
+	}
+	if d, ok := byName["KFan_Sw"]; !ok || d.Room != "Кухня" {
+		t.Fatalf("standalone device room: %+v", d)
 	}
 }

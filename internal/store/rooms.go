@@ -69,6 +69,29 @@ func (r *RoomRepo) Create(ctx context.Context, userID, name string) (*Room, erro
 	return &Room{ID: strconv.FormatInt(id, 10), Name: name, Position: pos}, nil
 }
 
+// Ensure returns the id of the user's room with the given name, creating it if
+// absent. Used when importing a discovered device into its openHAB location.
+func (r *RoomRepo) Ensure(ctx context.Context, userID, name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", nil
+	}
+	var id string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id FROM rooms WHERE user_id = ? AND name = ?`, userID, name).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", err
+	}
+	room, err := r.Create(ctx, userID, name)
+	if err != nil {
+		return "", err
+	}
+	return room.ID, nil
+}
+
 // Rename changes a room's name (scoped to the user).
 func (r *RoomRepo) Rename(ctx context.Context, userID, id, name string) error {
 	name = strings.TrimSpace(name)

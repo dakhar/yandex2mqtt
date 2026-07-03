@@ -33,6 +33,8 @@ type Handlers struct {
 	catalog    *store.CatalogRepo
 	reloader   Reloader
 	discoverer Discoverer // nil when openHAB isn't configured
+	settings   *store.SettingsRepo
+	ignore     *store.IgnoreRepo
 	log        *slog.Logger
 }
 

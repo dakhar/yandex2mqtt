@@ -7,44 +7,62 @@
 <div class="wrap">
   {{if .NotConfigured}}
     <p class="muted">openHAB не настроен. Задай <code>OPENHAB_URL</code> и <code>OPENHAB_TOKEN_FILE</code>.</p>
-  {{else if .Error}}
-    <div class="err">Не удалось прочитать openHAB: {{.Error}}</div>
-  {{else if not .Drafts}}
-    <p class="muted">Нет items с тегом <code>ya2mqtt</code>. Повесь тег на нужные items в openHAB и обнови страницу.</p>
   {{else}}
-    <p class="muted">Найдены items с тегом <code>ya2mqtt</code>. Тип и умения определены автоматически — добавь нужные.</p>
-    <table class="users">
-      <thead><tr><th>Item</th><th>Название</th><th>Тип</th><th>Умения / свойства</th><th></th></tr></thead>
-      <tbody>
-      {{range .Drafts}}
-        <tr>
-          <td><code>{{.Item}}</code></td>
-          <td>{{.Name}}</td>
-          <td>{{.Type}}</td>
-          <td>
-            {{range .Capabilities}}<span class="chip">{{.}}</span>{{end}}
-            {{range .Properties}}<span class="chip chip-prop">{{.}}</span>{{end}}
-          </td>
-          <td>
-            <form method="post" action="/app/discover/add">
-              <input type="hidden" name="item" value="{{.Item}}">
-              <button type="submit">Добавить</button>
-            </form>
-          </td>
-        </tr>
-      {{end}}
-      </tbody>
-    </table>
+    <div class="disc-settings">
+      <form method="post" action="/app/discover/tag" class="taginline">
+        <label>Тег-фильтр</label>
+        <input type="text" name="tag" value="{{.Tag}}" placeholder="пусто = все устройства">
+        <button type="submit">Применить</button>
+      </form>
+      <form method="post" action="/app/discover/clear-ignore">
+        <button type="submit" class="ghost">Очистить игнор</button>
+      </form>
+    </div>
+
+    {{if .Error}}
+      <div class="err">Не удалось прочитать openHAB: {{.Error}}</div>
+    {{else if not .Drafts}}
+      <p class="muted">Нет новых устройств для импорта{{if .Tag}} с тегом <code>{{.Tag}}</code>{{end}}. Уже добавленные и игнорируемые скрыты.</p>
+    {{else}}
+      <table class="users">
+        <thead><tr><th>Item</th><th>Название</th><th>Комната</th><th>Тип</th><th>Умения / свойства</th><th></th></tr></thead>
+        <tbody>
+        {{range .Drafts}}
+          <tr>
+            <td><code>{{.Item}}</code></td>
+            <td>{{.Name}}</td>
+            <td>{{.Room}}</td>
+            <td>{{.Type}}</td>
+            <td>
+              {{range .Capabilities}}<span class="chip">{{.}}</span>{{end}}
+              {{range .Properties}}<span class="chip chip-prop">{{.}}</span>{{end}}
+            </td>
+            <td class="acts">
+              <form method="post" action="/app/discover/add"><input type="hidden" name="item" value="{{.Item}}"><button type="submit">Добавить</button></form>
+              <form method="post" action="/app/discover/ignore"><input type="hidden" name="item" value="{{.Item}}"><button type="submit" class="ghost">Игнор</button></form>
+            </td>
+          </tr>
+        {{end}}
+        </tbody>
+      </table>
+    {{end}}
   {{end}}
 </div>
 
 <style>
   .wrap { padding: 20px; }
   .wrap code { background:#eef0f3; padding:1px 5px; border-radius:4px; font-size:13px; }
-  .chip { display:inline-block; background:#eef0f3; color:#3b5bdb; border-radius:6px;
-          padding:2px 8px; font-size:12px; margin:2px 3px 2px 0; }
+  .disc-settings { display:flex; align-items:center; gap:16px; margin-bottom:16px; }
+  .taginline { display:flex; align-items:center; gap:8px; margin:0; }
+  .taginline label { font-size:13px; color:#555; }
+  .taginline input { padding:7px 10px; border:1px solid #d0d3d9; border-radius:8px; font-size:14px; }
+  .disc-settings button { background:#ffcc00; border:0; border-radius:8px; padding:7px 12px; cursor:pointer; font-weight:600; }
+  .disc-settings form { margin:0; }
+  .ghost { background:#eef0f3 !important; color:#555; }
+  .chip { display:inline-block; background:#eef0f3; color:#3b5bdb; border-radius:6px; padding:2px 8px; font-size:12px; margin:2px 3px 2px 0; }
   .chip-prop { color:#2b8a3e; background:#ebfbee; }
-  .wrap table.users td form { margin:0; }
-  .wrap table.users button { background:#ffcc00; border:0; border-radius:8px; padding:6px 12px; cursor:pointer; font-weight:600; }
+  .acts { display:flex; gap:6px; }
+  .acts form { margin:0; }
+  .acts button { border:0; border-radius:8px; padding:6px 12px; cursor:pointer; font-weight:600; background:#ffcc00; }
 </style>
 {{end}}

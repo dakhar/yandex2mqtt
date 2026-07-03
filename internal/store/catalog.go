@@ -42,6 +42,17 @@ CREATE TABLE IF NOT EXISTS openhab_bindings (
     ord       INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_ohb_dev ON openhab_bindings(device_id);
+CREATE TABLE IF NOT EXISTS settings (
+    user_id TEXT NOT NULL,
+    key     TEXT NOT NULL,
+    value   TEXT NOT NULL,
+    PRIMARY KEY (user_id, key)
+);
+CREATE TABLE IF NOT EXISTS openhab_ignore (
+    user_id TEXT NOT NULL,
+    item    TEXT NOT NULL,
+    PRIMARY KEY (user_id, item)
+);
 CREATE TABLE IF NOT EXISTS capabilities (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id   TEXT    NOT NULL REFERENCES devices(id) ON DELETE CASCADE,

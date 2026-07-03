@@ -55,6 +55,29 @@ func hasTag(tags []string, want string) bool {
 	return false
 }
 
+// locationTags are the openHAB Location semantic tag leaf names (a group with
+// one of these is a Room/place, not a device).
+var locationTags = map[string]bool{
+	"Indoor": true, "Apartment": true, "Building": true, "Garage": true, "House": true,
+	"Shed": true, "SummerHouse": true, "Corridor": true, "Floor": true, "Attic": true,
+	"Basement": true, "FirstFloor": true, "GroundFloor": true, "SecondFloor": true,
+	"ThirdFloor": true, "Room": true, "Bathroom": true, "Bedroom": true, "BoilerRoom": true,
+	"Cellar": true, "DiningRoom": true, "Entry": true, "FamilyRoom": true, "GuestRoom": true,
+	"Kitchen": true, "LaundryRoom": true, "LivingRoom": true, "Office": true, "Veranda": true,
+	"Outdoor": true, "Carport": true, "Driveway": true, "Garden": true, "Patio": true,
+	"Porch": true, "Terrace": true,
+}
+
+// isLocation reports whether an item's tags mark it as a Location (Room).
+func isLocation(tags []string) bool {
+	for _, t := range tags {
+		if locationTags[t] {
+			return true
+		}
+	}
+	return false
+}
+
 // featuresForItem maps an item to its Yandex features + a suggested standalone
 // device type. Empty result = unsupported item.
 func featuresForItem(it ohItem) ([]feature, string) {
