@@ -73,6 +73,60 @@ func TestDraftsValidate(t *testing.T) {
 	}
 }
 
+func TestNumberMeterAndSetpoint(t *testing.T) {
+	// Water meter -> float property water_meter.
+	d, ok := draftForItem(ohItem{Name: "Cnt_CWater", Type: "Number", Tags: []string{"Water", "Measurement"}})
+	if !ok || d.Type != "devices.types.smart_meter" || len(d.Properties) != 1 {
+		t.Fatalf("water meter: ok=%v type=%q props=%d", ok, d.Type, len(d.Properties))
+	}
+	if d.Properties[0].Parameters["instance"] != "water_meter" || d.OpenHAB[0].Kind != "prop" {
+		t.Fatalf("water meter mapping: %+v / %+v", d.Properties[0].Parameters, d.OpenHAB)
+	}
+
+	// Temperature setpoint -> controllable range capability (thermostat).
+	d2, ok := draftForItem(ohItem{Name: "Th_Set", Type: "Number:Temperature", Tags: []string{"Setpoint"}})
+	if !ok || d2.Type != "devices.types.thermostat" || len(d2.Capabilities) != 1 || len(d2.Properties) != 0 {
+		t.Fatalf("setpoint: ok=%v type=%q caps=%d props=%d", ok, d2.Type, len(d2.Capabilities), len(d2.Properties))
+	}
+	if d2.OpenHAB[0].Kind != "cap" || d2.OpenHAB[0].Instance != "temperature" {
+		t.Fatalf("setpoint binding: %+v", d2.OpenHAB[0])
+	}
+	if errs, _ := device.ValidateCatalog([]config.Device{d, d2}); len(errs) > 0 {
+		t.Fatalf("meter/setpoint drafts invalid: %v", errs)
+	}
+}
+
+func TestGroupExpansion(t *testing.T) {
+	g := ohItem{Name: "Light_Kitchen", Type: "Group", Label: "Свет кухня", Tags: []string{"ya2mqtt", "Lightbulb"}}
+	members := []ohItem{
+		{Name: "LK_Power", Type: "Switch", Tags: []string{"Point"}},
+		{Name: "LK_Bright", Type: "Dimmer", Tags: []string{"Point"}},
+		{Name: "LK_Temp", Type: "Number:Temperature", Tags: []string{"Measurement"}},
+	}
+	d, ok := draftForGroup(g, members)
+	if !ok {
+		t.Fatal("group not inferred")
+	}
+	if d.Type != "devices.types.light" || d.Name != "Свет кухня" {
+		t.Fatalf("group device: type=%q name=%q", d.Type, d.Name)
+	}
+	// on_off (dedup: Switch + Dimmer both offer it -> once) + brightness + temp property.
+	if len(d.Capabilities) != 2 || len(d.Properties) != 1 {
+		t.Fatalf("composite caps=%d props=%d, want 2/1", len(d.Capabilities), len(d.Properties))
+	}
+	// Each capability binds to its own member item.
+	byInst := map[string]string{}
+	for _, b := range d.OpenHAB {
+		byInst[b.Instance] = b.Item
+	}
+	if byInst["on"] != "LK_Power" || byInst["brightness"] != "LK_Bright" || byInst["temperature"] != "LK_Temp" {
+		t.Fatalf("composite bindings wrong: %+v", byInst)
+	}
+	if errs, _ := device.ValidateCatalog([]config.Device{d}); len(errs) > 0 {
+		t.Fatalf("composite draft invalid: %v", errs)
+	}
+}
+
 func TestDiscoverReadsTaggedItems(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("tags") != DiscoveryTag {
