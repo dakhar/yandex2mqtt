@@ -143,9 +143,10 @@ func (c *Connector) getJSON(ctx context.Context, path string, v any) error {
 	return json.NewDecoder(resp.Body).Decode(v)
 }
 
-// draftForItem builds a single-item device from an item's features.
+// draftForItem builds a single-item device from an item's features (standalone,
+// so no equipment context).
 func draftForItem(it ohItem) (config.Device, bool) {
-	feats, dtype := featuresForItem(it)
+	feats, dtype := featuresForItem(it, "")
 	if len(feats) == 0 {
 		return config.Device{}, false
 	}
@@ -164,7 +165,7 @@ func draftForGroup(g ohItem, members []ohItem) (config.Device, bool) {
 	var feats []feature
 	seen := map[string]bool{}
 	for _, m := range members {
-		mf, _ := featuresForItem(m)
+		mf, _ := featuresForItem(m, dtype) // members inherit the equipment context
 		for _, f := range mf {
 			key := f.kind + "|" + f.instance
 			if seen[key] {

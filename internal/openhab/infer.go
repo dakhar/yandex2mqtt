@@ -79,8 +79,11 @@ func isLocation(tags []string) bool {
 }
 
 // featuresForItem maps an item to its Yandex features + a suggested standalone
-// device type. Empty result = unsupported item.
-func featuresForItem(it ohItem) ([]feature, string) {
+// device type. ctxType is the containing Equipment's Yandex type ("" for a
+// standalone item), used to disambiguate under-tagged analog points (e.g. a
+// bare Setpoint Dimmer is a volume inside a media device, brightness inside a
+// light). Empty result = unsupported item.
+func featuresForItem(it ohItem, ctxType string) ([]feature, string) {
 	role := pointRole(it.Tags)
 	prop := propertyTag(it.Tags)
 	base, _, _ := strings.Cut(it.Type, ":")
@@ -97,10 +100,7 @@ func featuresForItem(it ohItem) ([]feature, string) {
 	case "Switch":
 		return []feature{capFeat("on", capOnOff(), it.Name)}, deviceTypeFor(it.Tags, "devices.types.switch")
 	case "Dimmer":
-		return []feature{
-			capFeat("on", capOnOff(), it.Name),
-			capFeat("brightness", capBrightness(), it.Name),
-		}, deviceTypeFor(it.Tags, "devices.types.light")
+		return dimmerFeatures(it, ctxType)
 	case "Color":
 		return []feature{
 			capFeat("on", capOnOff(), it.Name),
@@ -115,9 +115,54 @@ func featuresForItem(it ohItem) ([]feature, string) {
 	case "Contact":
 		return []feature{propFeat("open", propEvent("open", "opened", "closed"), it.Name)}, "devices.types.sensor.open"
 	case "Number":
-		return numberFeature(it, role, prop)
+		return numberFeature(it, role, prop, ctxType)
 	}
 	return nil, ""
+}
+
+// dimmerFeatures maps a Dimmer (an analog 0-100 control) using its Property tag
+// or, when untagged, the containing Equipment's type.
+func dimmerFeatures(it ohItem, ctxType string) ([]feature, string) {
+	dimLight := func() ([]feature, string) {
+		return []feature{capFeat("on", capOnOff(), it.Name), capFeat("brightness", capBrightness(), it.Name)},
+			deviceTypeFor(it.Tags, "devices.types.light")
+	}
+	volume := func() ([]feature, string) {
+		return []feature{capFeat("volume", capRange("volume", "unit.percent", 0, 100, 1), it.Name)}, "devices.types.media_device"
+	}
+	tempSet := func(dt string) ([]feature, string) {
+		return []feature{capFeat("temperature", capRange("temperature", "unit.temperature.celsius", 10, 30, 0.5), it.Name)}, dt
+	}
+	position := func(dt string) ([]feature, string) {
+		return []feature{capFeat("open", capRange("open", "unit.percent", 0, 100, 1), it.Name), capFeat("on", capOnOff(), it.Name)}, dt
+	}
+
+	// Property tag is the strongest signal.
+	switch propertyTag(it.Tags) {
+	case "SoundVolume":
+		return volume()
+	case "Brightness":
+		return dimLight()
+	case "Temperature":
+		return tempSet("devices.types.thermostat")
+	case "OpenLevel", "Position", "Opening":
+		return position("devices.types.openable.curtain")
+	}
+	// Under-tagged: disambiguate by the containing equipment.
+	switch {
+	case isMediaType(ctxType):
+		return volume()
+	case ctxType == "devices.types.thermostat" || ctxType == "devices.types.thermostat.ac":
+		return tempSet(ctxType)
+	case strings.HasPrefix(ctxType, "devices.types.openable"):
+		return position(ctxType)
+	}
+	// Default: a dimmable light.
+	return dimLight()
+}
+
+func isMediaType(t string) bool {
+	return strings.HasPrefix(t, "devices.types.media_device")
 }
 
 // eventFeature maps a sensor Property tag to a Yandex event property.
@@ -141,12 +186,21 @@ func eventFeature(prop, item string) (feature, string, bool) {
 
 // numberFeature maps a Number item to a float property (Measurement) or a
 // controllable range (Setpoint), using its Property tag or dimension.
-func numberFeature(it ohItem, role, prop string) ([]feature, string) {
+func numberFeature(it ohItem, role, prop, ctxType string) ([]feature, string) {
 	_, dim, _ := strings.Cut(it.Type, ":")
 	if prop == "" {
 		prop = dim // "Number:Temperature" -> Temperature
 	}
 	setpoint := role == "control" || hasTag(it.Tags, "Setpoint")
+	// An under-tagged Setpoint takes its meaning from the containing equipment.
+	if setpoint && prop == "" {
+		switch {
+		case isMediaType(ctxType):
+			return []feature{capFeat("volume", capRange("volume", "unit.percent", 0, 100, 1), it.Name)}, "devices.types.media_device"
+		case ctxType == "devices.types.thermostat" || ctxType == "devices.types.thermostat.ac":
+			return []feature{capFeat("temperature", capRange("temperature", "unit.temperature.celsius", 10, 30, 0.5), it.Name)}, ctxType
+		}
+	}
 
 	f := func(feat feature, dtype string) ([]feature, string) { return []feature{feat}, dtype }
 	fl := func(inst, unit, dtype string) ([]feature, string) {
@@ -260,7 +314,7 @@ func equipmentType(tags []string) string {
 			return "devices.types.media_device.tv"
 		case "Receiver":
 			return "devices.types.media_device.receiver"
-		case "Speaker", "MediaPlayer", "AudioVisual", "Display":
+		case "Speaker", "MediaPlayer", "AudioVisual", "Display", "VoiceAssistant":
 			return "devices.types.media_device"
 		case "Camera", "Doorbell":
 			return "devices.types.camera"

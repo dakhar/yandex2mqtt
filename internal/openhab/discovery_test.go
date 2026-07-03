@@ -166,6 +166,29 @@ func TestSemanticSetpointVolumeAndPower(t *testing.T) {
 	}
 }
 
+func TestDimmerContextDisambiguation(t *testing.T) {
+	// An under-tagged volume Dimmer (only Setpoint) inside a VoiceAssistant
+	// equipment must become a media_device volume, NOT a light.
+	g := ohItem{Name: "e_Station", Type: "Group", Label: "Станция", Tags: []string{"VoiceAssistant"}}
+	members := []ohItem{{Name: "YaStation_Volume", Type: "Dimmer", Tags: []string{"Setpoint"}, GroupNames: []string{"e_Station"}}}
+	d, ok := draftForGroup(g, members)
+	if !ok || d.Type != "devices.types.media_device" {
+		t.Fatalf("station: ok=%v type=%q", ok, d.Type)
+	}
+	if len(d.Capabilities) != 1 || d.Capabilities[0].Parameters["instance"] != "volume" {
+		t.Fatalf("station volume cap: %+v", d.Capabilities)
+	}
+
+	// The same Dimmer standalone (no equipment context) falls back to a light.
+	sd, _ := draftForItem(ohItem{Name: "D", Type: "Dimmer", Tags: []string{"Setpoint"}})
+	if sd.Type != "devices.types.light" || len(sd.Capabilities) != 2 {
+		t.Fatalf("standalone dimmer: type=%q caps=%d", sd.Type, len(sd.Capabilities))
+	}
+	if errs, _ := device.ValidateCatalog([]config.Device{d, sd}); len(errs) > 0 {
+		t.Fatalf("drafts invalid: %v", errs)
+	}
+}
+
 func TestEquipmentTypeMapping(t *testing.T) {
 	cases := map[string]string{
 		"Blinds":         "devices.types.openable.curtain",

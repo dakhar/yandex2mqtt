@@ -18,15 +18,16 @@
     .roomform input { padding: 8px 11px; border: 1px solid #d0d3d9; border-radius: 8px; font-size: 14px; }
     .roomform button { padding: 8px 14px; border: 0; border-radius: 8px; background: #ffcc00;
                        font-weight: 600; cursor: pointer; }
-    .board { display: flex; gap: 16px; padding: 0 20px 24px; overflow-x: auto; align-items: flex-start; }
-    .column { background: #eef0f3; border-radius: 12px; width: 240px; flex: 0 0 auto; }
+    .board { display: flex; flex-direction: column; gap: 14px; padding: 0 20px 24px; }
+    .column { background: #eef0f3; border-radius: 12px; width: 100%; }
     .col-head { display: flex; align-items: center; justify-content: space-between;
-                padding: 10px 12px; font-weight: 600; font-size: 14px; }
+                padding: 10px 14px; font-weight: 600; font-size: 15px; }
     .col-actions button { border: 0; background: transparent; cursor: pointer; font-size: 14px; color: #666; }
     .col-actions form { display: inline; margin: 0; }
-    .column-body { min-height: 60px; padding: 6px; display: flex; flex-direction: column; gap: 8px; }
+    .column-body { min-height: 52px; padding: 6px 10px 12px; display: flex; flex-direction: row;
+                   flex-wrap: wrap; gap: 8px; }
     .card { background: #fff; border-radius: 10px; padding: 10px 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08);
-            cursor: grab; position: relative; }
+            cursor: grab; position: relative; width: 190px; box-sizing: border-box; }
     .card-actions { position: absolute; top: 4px; right: 6px; display: flex; align-items: center; gap: 2px; }
     .card-del { margin: 0; }
     .card-del button { border: 0; background: transparent; color: #c8ccd2; cursor: pointer; font-size: 14px; }
