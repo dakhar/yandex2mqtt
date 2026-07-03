@@ -1,0 +1,8 @@
+.git
+.gitignore
+data
+yahome
+*.md
+.env
+bin
+*.exe

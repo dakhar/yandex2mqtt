@@ -1,0 +1,14 @@
+# Secrets and local runtime state — never commit.
+.env
+/data/
+
+# Build output
+/bin/
+yandex2mqtt
+yandex2mqtt.exe
+*.db
+*.db-shm
+*.db-wal
+
+# Node reference (legacy) local artifacts, if any reappear
+node_modules/

@@ -1,0 +1,34 @@
+# Production deployment for the Go yandex2mqtt service.
+#
+# Secrets come from .env (rendered by Ansible Vault; never committed). The data
+# volume holds devices.yaml and the SQLite DB. The nginx-proxy + letsencrypt
+# companion route yahome.bels.pw to this container via VIRTUAL_HOST/VIRTUAL_PORT.
+services:
+  yandex2mqtt:
+    build: .
+    image: yandex2mqtt-go:latest
+    container_name: ya2mqtt
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - WEB_BEHIND_PROXY=true
+      - WEB_PORT=80
+      - VIRTUAL_HOST=yahome.bels.pw
+      - VIRTUAL_PORT=80
+      - LETSENCRYPT_HOST=yahome.bels.pw
+      - MQTT_HOST=10.12.1.103
+      - MQTT_PORT=1883
+      - DEVICES_FILE=/app/data/devices.yaml
+      - DB_PATH=/app/data/yandex2mqtt.db
+    volumes:
+      - /opt/yandex2mqtt/data:/app/data
+    networks:
+      - smarthome-ipv6
+      - proxy-tier
+
+networks:
+  smarthome-ipv6:
+    external: true
+  proxy-tier:
+    external: true

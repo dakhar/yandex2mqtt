@@ -1,0 +1,112 @@
+# Device catalog for yandex2mqtt.
+#
+# This file holds ONLY the non-secret device catalog. Secrets (passwords,
+# client secret, MQTT password, Yandex OAuth token, session secret) live in
+# the environment / .env — see .env.example.
+#
+# IMPORTANT: instance values like "on" must be quoted. Unquoted `on`/`off` are
+# parsed as booleans by YAML and will fail to load.
+#
+# YAML anchors (&name / *name) let you factor out repeated blocks. The keys
+# below starting with `x-` are anchor holders and are ignored by the loader.
+
+x-caps:
+  on_off: &cap-on-off
+    type: devices.capabilities.on_off
+    retrievable: true
+    reportable: true
+  brightness: &cap-brightness
+    type: devices.capabilities.range
+    retrievable: true
+    reportable: true
+    parameters:
+      instance: brightness
+      unit: unit.percent
+      range: { min: 0, max: 100, precision: 1 }
+
+x-props:
+  battery: &prop-battery
+    type: devices.properties.float
+    retrievable: true
+    reportable: true
+    parameters:
+      instance: battery_level
+      unit: unit.percent
+
+devices:
+  # Vacuum cleaner: on/off + pause toggle with value mapping, battery property.
+  - id: Cleaner_Kitchen
+    name: Пылесос
+    room: Кухня
+    type: devices.types.vacuum_cleaner
+    allowedUsers: ["1"]
+    mqtt:
+      capabilities:
+        - instance: "on"
+          set: yandex/VacuumCleaner_Kitchen/power/set
+          state: yandex/VacuumCleaner_Kitchen/state
+        - instance: pause
+          set: yandex/VacuumCleaner_Operation/control/set
+          state: yandex/VacuumCleaner_Operation/state
+      properties:
+        - instance: battery_level
+          state: yandex/VacuumCleaner_Batterylevel/state
+    valueMapping:
+      - type: toggle
+        mapping:
+          - instance: pause
+            mapping:
+              - [true, false, false, false]
+              - [PAUSE, START, STOP, HOME]
+    capabilities:
+      - *cap-on-off
+      - type: devices.capabilities.toggle
+        retrievable: true
+        reportable: true
+        parameters: { instance: pause }
+    properties:
+      - *prop-battery
+
+  # RGB/HSV light: on/off + brightness + hsv color.
+  - id: Light_Kitchen_Fartuk
+    name: Фартук
+    room: Кухня
+    type: devices.types.light
+    allowedUsers: ["1"]
+    mqtt:
+      capabilities:
+        - instance: "on"
+          set: yandex/Light_Kitchen_Fartuk_Virt/power/set
+          state: yandex/Light_Kitchen_Fartuk_Virt/state
+        - instance: brightness
+          set: yandex/Light_Kitchen_Fartuk_Brigth/brightness/set
+          state: yandex/Light_Kitchen_Fartuk_Brigth/state
+        - instance: hsv
+          set: yandex/Light_Kitchen_Fartuk_Color/hsv/set
+          state: yandex/Light_Kitchen_Fartuk_Color/state
+    capabilities:
+      - *cap-on-off
+      - *cap-brightness
+      - type: devices.capabilities.color_setting
+        retrievable: true
+        reportable: true
+        parameters:
+          color_model: hsv
+
+  # Water meter: single float property, no capabilities.
+  - id: Cnt_Kitchen_CWater
+    name: Холодная вода
+    room: Кухня
+    type: devices.types.smart_meter.cold_water
+    allowedUsers: ["1"]
+    mqtt:
+      properties:
+        - instance: water_meter
+          state: yandex/Cnt_Kitchen_CWater/state
+    properties:
+      - type: devices.properties.float
+        retrievable: true
+        reportable: true
+        parameters:
+          instance: water_meter
+          unit: unit.cubic_meter
