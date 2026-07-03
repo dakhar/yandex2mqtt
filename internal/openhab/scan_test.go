@@ -52,11 +52,11 @@ func TestScanAllItems(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	typeCount := map[string]int{}   // openHAB item type -> count
-	skipped := map[string]int{}     // skipped openHAB type -> count
-	yandexType := map[string]int{}  // resulting Yandex device type -> count
-	numberSkips := []string{}       // Number items we couldn't classify
-	var validationFails []string    // draft -> first validation error
+	typeCount := map[string]int{}  // openHAB item type -> count
+	skipped := map[string]int{}    // skipped openHAB type -> count
+	yandexType := map[string]int{} // resulting Yandex device type -> count
+	numberSkips := []string{}      // Number items we couldn't classify
+	var validationFails []string   // draft -> first validation error
 	inferred := 0
 
 	for _, it := range items {

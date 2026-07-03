@@ -127,6 +127,62 @@ func TestGroupExpansion(t *testing.T) {
 	}
 }
 
+func TestSemanticEventSensors(t *testing.T) {
+	// A "Switch" tagged Motion is a motion event sensor, NOT an on_off toggle.
+	d, ok := draftForItem(ohItem{Name: "Move_Bath", Type: "Switch", Tags: []string{"Point", "Status", "Motion"}})
+	if !ok || d.Type != "devices.types.sensor.motion" || len(d.Capabilities) != 0 || len(d.Properties) != 1 {
+		t.Fatalf("motion: ok=%v type=%q caps=%d props=%d", ok, d.Type, len(d.Capabilities), len(d.Properties))
+	}
+	if d.Properties[0].Parameters["instance"] != "motion" {
+		t.Fatalf("motion instance: %+v", d.Properties[0].Parameters)
+	}
+	// Smoke contact -> smoke event.
+	ds, _ := draftForItem(ohItem{Name: "Smoke", Type: "Contact", Tags: []string{"Alarm", "Smoke"}})
+	if ds.Type != "devices.types.sensor.smoke" || ds.Properties[0].Parameters["instance"] != "smoke" {
+		t.Fatalf("smoke: %+v", ds)
+	}
+	// Water: a readonly Contact is a leak sensor; a Number is a meter.
+	leak, _ := draftForItem(ohItem{Name: "Leak", Type: "Contact", Tags: []string{"Status", "Water"}})
+	if leak.Type != "devices.types.sensor.water_leak" || leak.Properties[0].Parameters["instance"] != "water_leak" {
+		t.Fatalf("leak: %+v", leak)
+	}
+	meter, _ := draftForItem(ohItem{Name: "Cnt", Type: "Number", Tags: []string{"Measurement", "Water"}})
+	if meter.Type != "devices.types.smart_meter" || meter.Properties[0].Parameters["instance"] != "water_meter" {
+		t.Fatalf("water meter: %+v", meter)
+	}
+	if errs, _ := device.ValidateCatalog([]config.Device{d, ds, leak, meter}); len(errs) > 0 {
+		t.Fatalf("event/meter drafts invalid: %v", errs)
+	}
+}
+
+func TestSemanticSetpointVolumeAndPower(t *testing.T) {
+	vol, ok := draftForItem(ohItem{Name: "Vol", Type: "Number", Tags: []string{"Setpoint", "SoundVolume"}})
+	if !ok || len(vol.Capabilities) != 1 || vol.Capabilities[0].Parameters["instance"] != "volume" {
+		t.Fatalf("volume setpoint: ok=%v %+v", ok, vol.Capabilities)
+	}
+	pw, ok := draftForItem(ohItem{Name: "Pwr", Type: "Number", Tags: []string{"Measurement", "Power"}})
+	if !ok || len(pw.Properties) != 1 || pw.Properties[0].Parameters["instance"] != "power" {
+		t.Fatalf("power measurement: ok=%v %+v", ok, pw.Properties)
+	}
+}
+
+func TestEquipmentTypeMapping(t *testing.T) {
+	cases := map[string]string{
+		"Blinds":         "devices.types.openable.curtain",
+		"CleaningRobot":  "devices.types.vacuum_cleaner",
+		"AirConditioner": "devices.types.thermostat.ac",
+		"Lock":           "devices.types.openable.door_lock",
+		"MotionDetector": "devices.types.sensor.motion",
+		"CoffeeMaker":    "devices.types.cooking.coffee_maker",
+		"Television":     "devices.types.media_device.tv",
+	}
+	for tag, want := range cases {
+		if got := equipmentType([]string{tag}); got != want {
+			t.Fatalf("equipmentType(%q) = %q, want %q", tag, got, want)
+		}
+	}
+}
+
 func TestDiscoverReadsTaggedItems(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("tags") != DiscoveryTag {
