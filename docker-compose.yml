@@ -1,8 +1,10 @@
 # Production deployment for the Go yandex2mqtt service.
 #
-# Secrets come from .env (rendered by Ansible Vault; never committed). The data
-# volume holds devices.yaml and the SQLite DB. The nginx-proxy + letsencrypt
-# companion route yahome.bels.pw to this container via VIRTUAL_HOST/VIRTUAL_PORT.
+# Deployment-specific values (domain, MQTT host, secrets) live in .env — see
+# .env.example. The nginx-proxy + letsencrypt companion route your public
+# domain to this container via VIRTUAL_HOST / VIRTUAL_PORT / LETSENCRYPT_HOST
+# (all supplied through .env). The data volume holds devices.yaml and the
+# SQLite DB.
 services:
   yandex2mqtt:
     build: .
@@ -14,21 +16,18 @@ services:
     environment:
       - WEB_BEHIND_PROXY=true
       - WEB_PORT=80
-      - VIRTUAL_HOST=yahome.bels.pw
-      - VIRTUAL_PORT=80
-      - LETSENCRYPT_HOST=yahome.bels.pw
-      - MQTT_HOST=10.12.1.103
-      - MQTT_PORT=1883
       - DEVICES_FILE=/app/data/devices.yaml
       - DB_PATH=/app/data/yandex2mqtt.db
     volumes:
-      - /opt/yandex2mqtt/data:/app/data
+      - ${DATA_DIR:-./data}:/app/data
     networks:
-      - smarthome-ipv6
+      - smarthome
       - proxy-tier
 
+# External networks are created by the broker/proxy stacks; set their real
+# names here to match your environment.
 networks:
-  smarthome-ipv6:
+  smarthome:
     external: true
   proxy-tier:
     external: true
