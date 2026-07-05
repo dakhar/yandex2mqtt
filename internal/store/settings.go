@@ -9,6 +9,10 @@ import (
 // filter. An empty/unset value means "consider all items".
 const SettingDiscoveryTag = "discovery_tag"
 
+// SettingDiscoveryMode is the per-user discovery mode: "semantic" (default,
+// equipment composition) or "flat" (every item as its own device).
+const SettingDiscoveryMode = "discovery_mode"
+
 // SettingsRepo stores per-user key/value settings.
 type SettingsRepo struct{ db *sql.DB }
 
@@ -39,6 +43,30 @@ func (r *SettingsRepo) GetOr(ctx context.Context, userID, key, def string) (stri
 		return def, nil
 	}
 	return v, nil
+}
+
+// All returns every setting for a user (for export).
+func (r *SettingsRepo) All(ctx context.Context, userID string) (map[string]string, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT key, value FROM settings WHERE user_id = ?`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		out[k] = v
+	}
+	return out, rows.Err()
+}
+
+// ClearAll removes all of a user's settings (for reset).
+func (r *SettingsRepo) ClearAll(ctx context.Context, userID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM settings WHERE user_id = ?`, userID)
+	return err
 }
 
 // Set upserts a user's setting.
@@ -79,6 +107,13 @@ func (r *IgnoreRepo) List(ctx context.Context, userID string) ([]string, error) 
 		out = append(out, it)
 	}
 	return out, rows.Err()
+}
+
+// Remove un-ignores a single item, so it reappears in discovery.
+func (r *IgnoreRepo) Remove(ctx context.Context, userID, item string) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM openhab_ignore WHERE user_id = ? AND item = ?`, userID, item)
+	return err
 }
 
 // Clear removes all of the user's ignored items.

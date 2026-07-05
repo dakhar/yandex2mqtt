@@ -40,10 +40,11 @@ type Connector struct {
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
 
-	mu        sync.RWMutex
-	devices   map[string]*device.Device
-	subs      map[string][]sub // openHAB item -> subscriptions
-	sseCancel context.CancelFunc
+	mu          sync.RWMutex
+	devices     map[string]*device.Device
+	subs        map[string][]sub // openHAB item -> subscriptions
+	sseCancel   context.CancelFunc
+	lastDevices []*device.Device // for a restart after Reconfigure
 }
 
 // NewConnector builds the openHAB connector. onUpdate may be nil.
@@ -90,7 +91,7 @@ func (c *Connector) Resync(devices []*device.Device) {
 	}
 
 	c.mu.Lock()
-	c.devices, c.subs = newDevices, newSubs
+	c.devices, c.subs, c.lastDevices = newDevices, newSubs, devices
 	if c.sseCancel != nil {
 		c.sseCancel()
 	}
@@ -102,6 +103,10 @@ func (c *Connector) Resync(devices []*device.Device) {
 	if len(items) == 0 {
 		return
 	}
+	if !c.configured() {
+		c.log.Info("openhab not configured; state streaming disabled")
+		return
+	}
 	go c.syncInitialStates(sseCtx, items)
 	go c.streamEvents(sseCtx)
 }
@@ -111,7 +116,7 @@ func (c *Connector) Publish(item, payload string) {
 	cmd := toOpenHABCommand(payload)
 	ctx, cancel := context.WithTimeout(c.rootCtx, 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/rest/items/"+item, strings.NewReader(cmd))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base()+"/rest/items/"+item, strings.NewReader(cmd))
 	if err != nil {
 		c.log.Error("openhab command build", "err", err)
 		return
@@ -146,15 +151,44 @@ func toOpenHABCommand(payload string) string {
 }
 
 func (c *Connector) auth(req *http.Request) {
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	c.mu.RLock()
+	tok := c.token
+	c.mu.RUnlock()
+	if tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
+}
+
+// base returns the current base URL under the lock (Reconfigure may change it).
+func (c *Connector) base() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.baseURL
+}
+
+// configured reports whether a URL and token are set.
+func (c *Connector) configured() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.baseURL != "" && c.token != ""
+}
+
+// Reconfigure points the connector at a new openHAB server at runtime and
+// restarts its streams against the previously synced device set.
+func (c *Connector) Reconfigure(cfg config.OpenHAB) {
+	c.mu.Lock()
+	c.baseURL = strings.TrimRight(cfg.URL, "/")
+	c.token = cfg.Token
+	devs := c.lastDevices
+	c.mu.Unlock()
+	c.log.Info("openhab reconfigured", "url", c.base())
+	c.Resync(devs)
 }
 
 // syncInitialStates fetches the current state of the watched items so devices
 // start correct after (re)connect.
 func (c *Connector) syncInitialStates(ctx context.Context, items []string) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/rest/items?fields=name,state", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base()+"/rest/items?fields=name,state", nil)
 	if err != nil {
 		return
 	}
@@ -198,7 +232,7 @@ func (c *Connector) streamEvents(ctx context.Context) {
 }
 
 func (c *Connector) connectSSE(ctx context.Context) error {
-	url := c.baseURL + "/rest/events?topics=openhab/items/*/statechanged"
+	url := c.base() + "/rest/events?topics=openhab/items/*/statechanged"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err

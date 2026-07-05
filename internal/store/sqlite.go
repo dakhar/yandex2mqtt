@@ -53,6 +53,17 @@ func migrate(db *sql.DB) error {
 	if err := addColumnIfMissing(db, "devices", "transport", "TEXT NOT NULL DEFAULT 'mqtt'"); err != nil {
 		return err
 	}
+	// mqtt_topics.state_path was added for JSON-payload state extraction.
+	if err := addColumnIfMissing(db, "mqtt_topics", "state_path", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// capabilities.invert was added for range-percentage inversion (curtains).
+	if err := addColumnIfMissing(db, "capabilities", "invert", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "properties", "invert", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	return nil
 }
 

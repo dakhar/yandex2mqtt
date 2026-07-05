@@ -24,7 +24,7 @@ type fakeDiscoverer struct {
 	lastTag string
 }
 
-func (f *fakeDiscoverer) Discover(_ context.Context, tag string) ([]config.Device, error) {
+func (f *fakeDiscoverer) Discover(_ context.Context, tag string, _ bool) ([]config.Device, error) {
 	f.lastTag = tag
 	return f.drafts, nil
 }

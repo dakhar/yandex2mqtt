@@ -1,7 +1,7 @@
 {{define "content"}}
 <div class="topbar">
   <span class="brand">yandex2mqtt · импорт из openHAB</span>
-  <span><a href="/app">← к доске</a> <a href="/logout">выйти</a></span>
+  <span><a href="#" id="langtog" onclick="toggleLang();return false" title="Язык / Language"></a> <a href="/app">← к доске</a> <a href="/logout">выйти</a></span>
 </div>
 
 <div class="wrap">
@@ -14,17 +14,23 @@
         <input type="text" name="tag" value="{{.Tag}}" placeholder="пусто = все устройства">
         <button type="submit">Применить</button>
       </form>
-      <form method="post" action="/app/discover/clear-ignore">
-        <button type="submit" class="ghost">Очистить игнор</button>
+      <a href="/app/discover/ignored" class="ghost ign-link">Игнорируемые</a>
+      <form method="post" action="/app/discover/mode" class="modeform" title="Режим дискаверинга">
+        <button type="submit" name="mode" value="semantic" class="modebtn{{if not .Flat}} active{{end}}">Семантика</button><button type="submit" name="mode" value="flat" class="modebtn{{if .Flat}} active{{end}}">Плоско</button>
       </form>
+      <input id="filter" type="search" class="disc-filter" oninput="applyFilter()"
+             placeholder="Поиск: item, название, комната, тип…">
     </div>
 
+    {{if .AddError}}
+      <div class="err">{{if eq .AddError "name"}}Название длиннее 25 символов (ограничение Алисы) — сократите его через «Настроить» и добавьте.{{else}}Не удалось добавить устройство.{{end}}</div>
+    {{end}}
     {{if .Error}}
       <div class="err">Не удалось прочитать openHAB: {{.Error}}</div>
     {{else if not .Drafts}}
       <p class="muted">Нет новых устройств для импорта{{if .Tag}} с тегом <code>{{.Tag}}</code>{{end}}. Уже добавленные и игнорируемые скрыты.</p>
     {{else}}
-      <table class="users">
+      <table class="users" id="drafts">
         <thead><tr><th>Item</th><th>Название</th><th>Комната</th><th>Тип</th><th>Умения / свойства</th><th></th></tr></thead>
         <tbody>
         {{range .Drafts}}
@@ -32,19 +38,21 @@
             <td><code>{{.Item}}</code></td>
             <td>{{.Name}}</td>
             <td>{{.Room}}</td>
-            <td>{{.Type}}</td>
+            <td data-type="{{.Type}}">{{.Type}}</td>
             <td>
               {{range .Capabilities}}<span class="chip">{{.}}</span>{{end}}
               {{range .Properties}}<span class="chip chip-prop">{{.}}</span>{{end}}
             </td>
             <td class="acts">
-              <form method="post" action="/app/discover/add"><input type="hidden" name="item" value="{{.Item}}"><button type="submit">Добавить</button></form>
-              <form method="post" action="/app/discover/ignore"><input type="hidden" name="item" value="{{.Item}}"><button type="submit" class="ghost">Игнор</button></form>
+              <form method="post" action="/app/discover/add"><input type="hidden" name="item" value="{{.Item}}"><button type="submit" class="btn-add">Добавить</button></form>
+              <a class="btn-cfg" href="/app/devices/new?from={{.Item}}">Настроить</a>
+              <form method="post" action="/app/discover/ignore"><input type="hidden" name="item" value="{{.Item}}"><button type="submit" class="btn-ignore">Игнор</button></form>
             </td>
           </tr>
         {{end}}
         </tbody>
       </table>
+      <p id="nomatch" class="muted" style="display:none">Ничего не найдено по фильтру.</p>
     {{end}}
   {{end}}
 </div>
@@ -59,10 +67,65 @@
   .disc-settings button { background:#ffcc00; border:0; border-radius:8px; padding:7px 12px; cursor:pointer; font-weight:600; }
   .disc-settings form { margin:0; }
   .ghost { background:#eef0f3 !important; color:#555; }
+  .ign-link { text-decoration:none; padding:7px 12px; border-radius:8px; display:inline-block; font-weight:600; font-size:14px; }
+  .modeform { display:inline-flex; margin:0; border:1px solid #d0d3d9; border-radius:8px; overflow:hidden; }
+  .modebtn { border:0; background:#fff; color:#555; padding:7px 12px; cursor:pointer; font-size:13px; }
+  .modebtn.active { background:#3b5bdb; color:#fff; font-weight:600; }
   .chip { display:inline-block; background:#eef0f3; color:#3b5bdb; border-radius:6px; padding:2px 8px; font-size:12px; margin:2px 3px 2px 0; }
   .chip-prop { color:#2b8a3e; background:#ebfbee; }
-  .acts { display:flex; gap:6px; }
+  .disc-filter { padding:7px 10px; border:1px solid #d0d3d9; border-radius:8px; font-size:14px; min-width:260px; margin-left:auto; }
+  .acts { display:flex; align-items:center; gap:6px; }
   .acts form { margin:0; }
-  .acts button { border:0; border-radius:8px; padding:6px 12px; cursor:pointer; font-weight:600; background:#ffcc00; }
+  .acts button, .acts .btn-cfg { border:0; border-radius:8px; padding:6px 12px; cursor:pointer; font-weight:600;
+                                 font-size:13px; text-decoration:none; display:inline-block; line-height:1.4; }
+  .btn-add { background:#2f9e44; color:#fff; }
+  .btn-cfg { background:#ffcc00; color:#1a1a1a; }
+  .btn-ignore { background:#e03131; color:#fff; }
 </style>
+<script>
+// Shared RU/EN choice; localize device types and capability/property chips.
+const LANG = (localStorage.getItem('ya_lang') === 'en') ? 'en' : 'ru';
+document.getElementById('langtog').textContent = LANG === 'en' ? 'RU' : 'EN';
+function toggleLang() {
+  localStorage.setItem('ya_lang', LANG === 'en' ? 'ru' : 'en');
+  location.reload();
+}
+fetch('/app/schema').then(r => r.json()).then(function (s) {
+  const L = s.labels || {};
+  const pick = (cat, key) => { const e = (L[cat] || {})[key]; return e && e[LANG]; };
+  document.querySelectorAll('td[data-type]').forEach(function (el) {
+    const t = pick('device_types', el.dataset.type);
+    if (t) el.textContent = t;
+  });
+  document.querySelectorAll('.chip').forEach(function (el) {
+    const prop = el.classList.contains('chip-prop');
+    const full = (prop ? 'devices.properties.' : 'devices.capabilities.') + el.textContent.trim();
+    const t = pick(prop ? 'properties' : 'capabilities', full);
+    if (t) el.textContent = t;
+  });
+}).catch(function () {});
+
+function applyFilter() {
+  const el = document.getElementById('filter');
+  if (!el) return;
+  const q = el.value.trim().toLowerCase();
+  sessionStorage.setItem('discover_filter', el.value); // survive the reload after Добавить/Игнор
+  const rows = document.querySelectorAll('#drafts tbody tr');
+  let shown = 0;
+  rows.forEach(tr => {
+    const hit = tr.textContent.toLowerCase().includes(q);
+    tr.style.display = hit ? '' : 'none';
+    if (hit) shown++;
+  });
+  const nm = document.getElementById('nomatch');
+  if (nm) nm.style.display = shown === 0 ? '' : 'none';
+}
+
+// Restore the filter after a POST->redirect reload so it doesn't "slip off".
+(function () {
+  const el = document.getElementById('filter');
+  const saved = sessionStorage.getItem('discover_filter');
+  if (el && saved) { el.value = saved; applyFilter(); }
+})();
+</script>
 {{end}}

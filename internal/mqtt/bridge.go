@@ -40,6 +40,7 @@ type subscription struct {
 	deviceID string
 	instance string
 	isProp   bool
+	path     string // optional JSON dot-path into the payload
 }
 
 // New builds a Bridge and connects lazily via Connect. Devices are supplied
@@ -56,6 +57,13 @@ func New(cfg config.MQTT, log *slog.Logger, onUpdate UpdateHook) *Bridge {
 		subs:     map[string][]subscription{},
 		filters:  map[string]byte{},
 	}
+	b.client = b.newClient(cfg)
+	return b
+}
+
+// newClient builds a paho client for the given broker config, wired to this
+// bridge's connect/message/lost handlers.
+func (b *Bridge) newClient(cfg config.MQTT) paho.Client {
 	opts := paho.NewClientOptions().
 		AddBroker(fmt.Sprintf("tcp://%s:%d", cfg.Host, cfg.Port)).
 		SetClientID("yandex2mqtt").
@@ -75,8 +83,23 @@ func New(cfg config.MQTT, log *slog.Logger, onUpdate UpdateHook) *Bridge {
 	if cfg.Password != "" {
 		opts.SetPassword(cfg.Password)
 	}
-	b.client = paho.NewClient(opts)
-	return b
+	return paho.NewClient(opts)
+}
+
+// Reconfigure swaps the broker connection at runtime (admin changed the MQTT
+// server). The subscription tables are preserved, so onConnect re-subscribes the
+// current topics against the new broker.
+func (b *Bridge) Reconfigure(cfg config.MQTT) error {
+	old := b.client
+	b.mu.Lock()
+	b.connected = false
+	b.mu.Unlock()
+	if old != nil {
+		old.Disconnect(250)
+	}
+	b.client = b.newClient(cfg)
+	b.log.Info("mqtt reconfigured", "broker", fmt.Sprintf("%s:%d", cfg.Host, cfg.Port))
+	return b.Connect()
 }
 
 // buildTables computes the subscription tables for a device set.
@@ -84,18 +107,18 @@ func buildTables(devices []*device.Device) (map[string][]subscription, map[strin
 	subs := map[string][]subscription{}
 	filters := map[string]byte{}
 	devMap := make(map[string]*device.Device, len(devices))
-	add := func(topic, id, instance string, isProp bool) {
+	add := func(topic, id, instance string, isProp bool, path string) {
 		if topic == "" {
 			return
 		}
 		key := strings.ToLower(topic)
-		subs[key] = append(subs[key], subscription{deviceID: id, instance: instance, isProp: isProp})
+		subs[key] = append(subs[key], subscription{deviceID: id, instance: instance, isProp: isProp, path: path})
 		filters[topic] = 0
 	}
 	for _, d := range devices {
 		devMap[d.ID] = d
 		for _, b := range d.StateBindings() {
-			add(b.Source, d.ID, b.Instance, b.IsProp)
+			add(b.Source, d.ID, b.Instance, b.IsProp, b.Path)
 		}
 	}
 	return subs, filters, devMap
@@ -211,7 +234,16 @@ func (b *Bridge) dispatch(topic, payload string) {
 		if d == nil {
 			continue
 		}
-		d.UpdateFromMQTT(payload, s.instance, s.isProp)
+		value := payload
+		if s.path != "" {
+			v, ok := extractJSONPath(payload, s.path)
+			if !ok {
+				b.log.Debug("mqtt json path not found", "topic", topic, "path", s.path)
+				continue
+			}
+			value = v
+		}
+		d.UpdateFromMQTT(value, s.instance, s.isProp)
 		if b.onUpdate != nil {
 			b.onUpdate(d, s.instance, s.isProp)
 		}

@@ -121,6 +121,97 @@ func TestOnOffThermostatInbound(t *testing.T) {
 	}
 }
 
+func TestUnseenSensorOmittedFromQuery(t *testing.T) {
+	d := New(config.Device{
+		ID: "S", Type: "devices.types.sensor.climate",
+		MQTT: config.MQTTMapping{
+			Capabilities: []config.MQTTTopic{{Instance: "on", Set: "x/set", State: "x/st"}},
+			Properties:   []config.MQTTTopic{{Instance: "temperature", State: "t/st"}},
+		},
+		Capabilities: []config.Capability{{Type: "devices.capabilities.on_off", Retrievable: true}},
+		Properties: []config.Property{{Type: "devices.properties.float", Retrievable: true,
+			Parameters: map[string]any{"instance": "temperature", "unit": "unit.temperature.celsius"}}},
+	}, nil, nil)
+
+	// Before any real value: the sensor (float) is omitted so Yandex doesn't see a
+	// fake 0 °C, but the controllable on_off keeps its default.
+	q := d.QueryState()
+	if len(q.Properties) != 0 {
+		t.Fatalf("unseen sensor must be omitted, got %+v", q.Properties)
+	}
+	if len(q.Capabilities) != 1 {
+		t.Fatalf("controllable capability must report its default, got %+v", q.Capabilities)
+	}
+
+	// After a real value arrives, the sensor is reported.
+	d.UpdateFromMQTT("21.5", "temperature", true)
+	q = d.QueryState()
+	if len(q.Properties) != 1 || q.Properties[0].State.Value != 21.5 {
+		t.Fatalf("seen sensor must report its value, got %+v", q.Properties)
+	}
+}
+
+func TestRangeInversion(t *testing.T) {
+	var gotMsg string
+	d := New(config.Device{
+		ID: "C", Type: "devices.types.openable.curtain",
+		MQTT: config.MQTTMapping{Capabilities: []config.MQTTTopic{{Instance: "open", Set: "c/set", State: "c/state"}}},
+		Capabilities: []config.Capability{{
+			Type: "devices.capabilities.range", Invert: true,
+			Parameters: map[string]any{"instance": "open", "unit": "unit.percent",
+				"range": map[string]any{"min": 0, "max": 100, "precision": 1}},
+		}},
+	}, func(_, msg string) { gotMsg = msg }, nil)
+
+	// Outbound: Yandex 80% open -> device 20% (and cur keeps the Yandex value).
+	d.SetCapabilityState(80.0, "devices.capabilities.range", "open", false)
+	if gotMsg != "20" {
+		t.Fatalf("outbound msg = %q, want 20", gotMsg)
+	}
+	c := d.findCapByInstance("open")
+	if toFloatOr(c.cur.Value, 0) != 80 {
+		t.Fatalf("cur (Yandex) = %v, want 80", c.cur.Value)
+	}
+	// Inbound: device 30% -> Yandex 70%.
+	d.UpdateFromMQTT("30", "open", false)
+	if toFloatOr(c.cur.Value, 0) != 70 {
+		t.Fatalf("inbound = %v, want 70", c.cur.Value)
+	}
+}
+
+func TestErrorCodeFromStatus(t *testing.T) {
+	d := New(config.Device{
+		ID: "V", Type: "devices.types.vacuum_cleaner",
+		MQTT: config.MQTTMapping{Capabilities: []config.MQTTTopic{{Instance: "on", Set: "v/set", State: "v/state"}}},
+		Error: &config.ErrorBinding{State: "v/status", Mapping: []config.ErrorPair{
+			{Value: "stuck", Code: "DEVICE_STUCK"}, {Value: "dustbin_full", Code: "CONTAINER_FULL"}}},
+		Capabilities: []config.Capability{{Type: "devices.capabilities.on_off", Retrievable: true}},
+	}, nil, nil)
+
+	// The status source is subscribed as a reserved state binding.
+	found := false
+	for _, b := range d.StateBindings() {
+		if b.Instance == ErrorInstance && b.Source == "v/status" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("no error state binding")
+	}
+	if d.QueryState().ErrorCode != "" {
+		t.Fatal("expected no error initially")
+	}
+	d.UpdateFromMQTT("stuck", ErrorInstance, true)
+	if got := d.QueryState().ErrorCode; got != "DEVICE_STUCK" {
+		t.Fatalf("error = %q, want DEVICE_STUCK", got)
+	}
+	// An unmapped status clears the error.
+	d.UpdateFromMQTT("cleaning", ErrorInstance, true)
+	if got := d.QueryState().ErrorCode; got != "" {
+		t.Fatalf("error not cleared: %q", got)
+	}
+}
+
 func TestFanSpeedClosestInbound(t *testing.T) {
 	d := New(config.Device{
 		ID:   "Fan",

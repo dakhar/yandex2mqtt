@@ -3,6 +3,8 @@
   <span class="brand">yandex2mqtt</span>
   <span>
     <span style="color:#8a8f98;font-size:14px">{{.User.Name}}</span>
+    <a href="#" id="langtog" onclick="toggleLang();return false" title="Язык / Language"></a>
+    <a href="/app/settings">настройки</a>
     <a href="/account">аккаунт</a>
     {{if .User.IsAdmin}}<a href="/app/users">пользователи</a>{{end}}
     <a href="/logout">выйти</a>
@@ -12,7 +14,7 @@
 {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
 
 <form class="roomform" method="post" action="/app/rooms">
-  <input type="text" name="name" placeholder="Новая комната" autocomplete="off" required>
+  <input type="text" name="name" maxlength="20" placeholder="Новая комната (до 20 симв.)" autocomplete="off" required>
   <button type="submit">Добавить комнату</button>
   <a href="/app/devices/new" class="newdev">+ устройство</a>
   <a href="/app/discover" class="newdev">импорт из openHAB</a>
@@ -36,13 +38,13 @@
       {{range .Devices}}
       <div class="card" data-id="{{.ID}}">
         <div class="card-actions">
-          {{if ne .Transport "openhab"}}<a class="card-edit" href="/app/devices/{{.ID}}/edit" title="Редактировать">✎</a>{{end}}
+          <a class="card-edit" href="/app/devices/{{.ID}}/edit" title="Редактировать">✎</a>
           <form class="card-del" method="post" action="/app/devices/{{.ID}}/delete" onsubmit="return confirm('Удалить устройство «{{.Name}}»?')">
             <button title="Удалить" type="submit">×</button>
           </form>
         </div>
         <div class="card-name">{{.Name}}</div>
-        <div class="card-type">{{.Type}}</div>
+        <div class="card-type" data-type="{{.Type}}">{{.Type}}</div>
         <div class="card-id">{{.ID}}</div>
       </div>
       {{end}}
@@ -67,6 +69,21 @@
       }
     });
   });
+
+  // Localize device-type captions on the cards using the shared RU/EN choice.
+  const LANG = (localStorage.getItem('ya_lang') === 'en') ? 'en' : 'ru';
+  document.getElementById('langtog').textContent = LANG === 'en' ? 'RU' : 'EN';
+  function toggleLang() {
+    localStorage.setItem('ya_lang', LANG === 'en' ? 'ru' : 'en');
+    location.reload();
+  }
+  fetch('/app/schema').then(r => r.json()).then(function (s) {
+    const dt = (s.labels && s.labels.device_types) || {};
+    document.querySelectorAll('.card-type[data-type]').forEach(function (el) {
+      const e = dt[el.dataset.type];
+      if (e && e[LANG]) el.textContent = e[LANG];
+    });
+  }).catch(function () {});
 
   function renameRoom(id, current) {
     var name = prompt('Новое название комнаты', current);

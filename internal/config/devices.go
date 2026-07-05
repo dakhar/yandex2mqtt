@@ -26,6 +26,25 @@ type Device struct {
 	Properties   []Property     `yaml:"properties,omitempty"`
 	// OpenHAB holds per-instance item bindings when Transport == "openhab".
 	OpenHAB []OpenHABBinding `yaml:"openhab,omitempty"`
+	// Error binds a device status source to Yandex's device-level error_code.
+	Error *ErrorBinding `yaml:"error,omitempty"`
+}
+
+// ErrorBinding maps a device's status item/topic to a Yandex error_code. Source
+// is an openHAB item (openhab transport) or an MQTT state topic; StatePath
+// optionally extracts a JSON field. Mapping translates raw values to error codes
+// (an unmapped/absent value means "no error").
+type ErrorBinding struct {
+	Item      string      `yaml:"item,omitempty"`
+	State     string      `yaml:"state,omitempty"`
+	StatePath string      `yaml:"state_path,omitempty"`
+	Mapping   []ErrorPair `yaml:"mapping,omitempty"`
+}
+
+// ErrorPair maps one raw device value to a Yandex error_code.
+type ErrorPair struct {
+	Value string `yaml:"value"`
+	Code  string `yaml:"code"`
 }
 
 // OpenHABBinding ties a capability/property instance to an openHAB item.
@@ -41,11 +60,14 @@ type MQTTMapping struct {
 	Properties   []MQTTTopic `yaml:"properties,omitempty"`
 }
 
-// MQTTTopic maps a single instance to its set/state topics.
+// MQTTTopic maps a single instance to its set/state topics. StatePath, when set,
+// extracts the value from a JSON state payload by dot-path (e.g. "state",
+// "ENERGY.Power") so several instances can share one topic (Tasmota, z2m, etc.).
 type MQTTTopic struct {
-	Instance string `yaml:"instance"`
-	Set      string `yaml:"set,omitempty"`
-	State    string `yaml:"state"`
+	Instance  string `yaml:"instance"`
+	Set       string `yaml:"set,omitempty"`
+	State     string `yaml:"state"`
+	StatePath string `yaml:"state_path,omitempty"`
 }
 
 // Capability is a Yandex capability declaration. Parameters vary by type, so
@@ -55,6 +77,10 @@ type Capability struct {
 	Retrievable bool           `yaml:"retrievable"`
 	Reportable  bool           `yaml:"reportable"`
 	Parameters  map[string]any `yaml:"parameters,omitempty"`
+	// Invert flips a range percentage between the device and Yandex (e.g. an
+	// openHAB Rollershutter where 0% = open but Yandex open = 100%). Not sent to
+	// Yandex.
+	Invert bool `yaml:"invert,omitempty"`
 }
 
 // Property is a Yandex property declaration.

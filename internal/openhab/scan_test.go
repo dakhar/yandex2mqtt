@@ -32,7 +32,7 @@ func TestScanAllItems(t *testing.T) {
 		token = strings.TrimSpace(string(b))
 	}
 
-	req, _ := http.NewRequest(http.MethodGet, strings.TrimRight(url, "/")+"/rest/items?fields=name,type,label,tags,groupNames", nil)
+	req, _ := http.NewRequest(http.MethodGet, strings.TrimRight(url, "/")+"/rest/items?metadata=yahome&fields=name,type,label,tags,groupNames,metadata", nil)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

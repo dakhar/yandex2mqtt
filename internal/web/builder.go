@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -23,12 +24,32 @@ func (h *Handlers) Schema(w http.ResponseWriter, _ *http.Request) {
 // NewDevice renders the builder for a new device (GET /app/devices/new).
 func (h *Handlers) NewDevice(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFrom(r.Context())
-	rooms, err := h.rooms.List(r.Context(), u.ID)
+	ctx := r.Context()
+	rooms, err := h.rooms.List(ctx, u.ID)
 	if err != nil {
 		http.Error(w, "list rooms", http.StatusInternalServerError)
 		return
 	}
-	h.render(w, "builder.html", map[string]any{"User": u, "Rooms": rooms})
+	data := map[string]any{"User": u, "Rooms": rooms}
+
+	// "Configure before add": prefill from an openHAB discovery draft.
+	if from := r.URL.Query().Get("from"); from != "" && h.discoverer != nil {
+		if drafts, err := h.discoverer.Discover(ctx, h.discoveryTag(ctx, u.ID), h.discoveryFlat(ctx, u.ID)); err == nil {
+			if d, ok := draftByItem(drafts, from); ok {
+				roomID := ""
+				if d.Room != "" {
+					if id, err := h.rooms.Ensure(ctx, u.ID, d.Room); err == nil {
+						roomID = id
+						rooms, _ = h.rooms.List(ctx, u.ID) // include the just-ensured room
+						data["Rooms"] = rooms
+					}
+				}
+				devJSON, _ := json.Marshal(toInput(d, roomID))
+				data["Device"] = string(devJSON)
+			}
+		}
+	}
+	h.render(w, "builder.html", data)
 }
 
 // EditDevice renders the builder prefilled with an existing device
@@ -74,19 +95,37 @@ type capInput struct {
 	Retrievable bool           `json:"retrievable"`
 	Reportable  bool           `json:"reportable"`
 	Params      map[string]any `json:"params"`
-	Set         string         `json:"set"`
-	State       string         `json:"state"`
+	Set         string         `json:"set"`        // MQTT command topic
+	State       string         `json:"state"`      // MQTT state topic
+	StatePath   string         `json:"state_path"` // optional JSON dot-path into state payload
+	Item        string         `json:"item"`       // openHAB item
+	Invert      bool           `json:"invert"`     // invert range percentage
 	Mapping     []mapPair      `json:"mapping,omitempty"`
 }
 
 // deviceInput is the builder's create/update payload.
 type deviceInput struct {
-	Name         string     `json:"name"`
-	Type         string     `json:"type"`
-	RoomID       string     `json:"room_id"`
-	Description  string     `json:"description"`
-	Capabilities []capInput `json:"capabilities"`
-	Properties   []capInput `json:"properties"`
+	Name         string      `json:"name"`
+	Type         string      `json:"type"`
+	Transport    string      `json:"transport"` // "mqtt" (default) | "openhab"
+	RoomID       string      `json:"room_id"`
+	Description  string      `json:"description"`
+	Capabilities []capInput  `json:"capabilities"`
+	Properties   []capInput  `json:"properties"`
+	Error        *errorInput `json:"error,omitempty"`
+}
+
+// errorInput is the device status -> error_code binding from the form.
+type errorInput struct {
+	Item      string      `json:"item"`
+	State     string      `json:"state"`
+	StatePath string      `json:"state_path"`
+	Mapping   []errorPair `json:"mapping"`
+}
+
+type errorPair struct {
+	Value string `json:"value"`
+	Code  string `json:"code"`
 }
 
 // CreateDevice builds, validates, persists and hot-reloads a new device
@@ -140,46 +179,87 @@ func decodeInput(w http.ResponseWriter, r *http.Request) (deviceInput, bool) {
 		writeErrors(w, http.StatusBadRequest, "укажите название и тип устройства")
 		return in, false
 	}
+	if utf8.RuneCountInString(in.Name) > maxDeviceNameLen {
+		writeErrors(w, http.StatusBadRequest, "название устройства — не длиннее 25 символов (ограничение Алисы)")
+		return in, false
+	}
 	return in, true
 }
+
+// Alice limits device names to 25 and room names to 20 characters.
+const (
+	maxDeviceNameLen = 25
+	maxRoomNameLen   = 20
+)
 
 // buildDevice assembles a config.Device from the form input, including value
 // mappings (grouped by capability act-type).
 func buildDevice(userID, id string, in deviceInput) config.Device {
+	transport := in.Transport
+	if transport == "" {
+		transport = "mqtt"
+	}
+	openhab := transport == "openhab"
 	d := config.Device{
 		ID: id, Name: in.Name, Type: in.Type, Description: in.Description,
-		AllowedUsers: []string{userID},
+		Transport: transport, AllowedUsers: []string{userID},
 	}
 	vmIndex := map[string]int{} // actType -> index in d.ValueMapping
+	// addMapping records a value-mapping table for a capability/property instance
+	// (grouped by act-type). Event properties use it to translate a raw sensor
+	// value to the Yandex event enum (opened/closed, dry/leak, ...).
+	addMapping := func(at, instance string, pairs []mapPair) {
+		if len(pairs) == 0 {
+			return
+		}
+		var yandex, mqtt []any
+		for _, p := range pairs {
+			yandex = append(yandex, p.Yandex)
+			mqtt = append(mqtt, p.Mqtt)
+		}
+		im := config.InstanceMapping{Instance: instance, Mapping: [][]any{yandex, mqtt}}
+		if idx, ok := vmIndex[at]; ok {
+			d.ValueMapping[idx].Mapping = append(d.ValueMapping[idx].Mapping, im)
+		} else {
+			vmIndex[at] = len(d.ValueMapping)
+			d.ValueMapping = append(d.ValueMapping, config.ValueMapping{Type: at, Mapping: []config.InstanceMapping{im}})
+		}
+	}
 	for _, c := range in.Capabilities {
 		d.Capabilities = append(d.Capabilities, config.Capability{
-			Type: c.Type, Retrievable: c.Retrievable, Reportable: c.Reportable, Parameters: c.Params,
+			Type: c.Type, Retrievable: c.Retrievable, Reportable: c.Reportable, Parameters: c.Params, Invert: c.Invert,
 		})
-		if c.Set != "" || c.State != "" {
-			d.MQTT.Capabilities = append(d.MQTT.Capabilities, config.MQTTTopic{Instance: c.Instance, Set: c.Set, State: c.State})
-		}
-		if len(c.Mapping) > 0 {
-			actType := actType(c.Type)
-			var yandex, mqtt []any
-			for _, p := range c.Mapping {
-				yandex = append(yandex, p.Yandex)
-				mqtt = append(mqtt, p.Mqtt)
+		if openhab {
+			if c.Item != "" {
+				d.OpenHAB = append(d.OpenHAB, config.OpenHABBinding{Kind: "cap", Instance: c.Instance, Item: c.Item})
 			}
-			im := config.InstanceMapping{Instance: c.Instance, Mapping: [][]any{yandex, mqtt}}
-			if idx, ok := vmIndex[actType]; ok {
-				d.ValueMapping[idx].Mapping = append(d.ValueMapping[idx].Mapping, im)
-			} else {
-				vmIndex[actType] = len(d.ValueMapping)
-				d.ValueMapping = append(d.ValueMapping, config.ValueMapping{Type: actType, Mapping: []config.InstanceMapping{im}})
-			}
+		} else if c.Set != "" || c.State != "" {
+			d.MQTT.Capabilities = append(d.MQTT.Capabilities, config.MQTTTopic{Instance: c.Instance, Set: c.Set, State: c.State, StatePath: c.StatePath})
 		}
+		addMapping(actType(c.Type), c.Instance, c.Mapping)
 	}
 	for _, p := range in.Properties {
 		d.Properties = append(d.Properties, config.Property{
 			Type: p.Type, Retrievable: p.Retrievable, Reportable: p.Reportable, Parameters: p.Params,
 		})
-		if p.State != "" {
-			d.MQTT.Properties = append(d.MQTT.Properties, config.MQTTTopic{Instance: p.Instance, State: p.State})
+		if openhab {
+			if p.Item != "" {
+				d.OpenHAB = append(d.OpenHAB, config.OpenHABBinding{Kind: "prop", Instance: p.Instance, Item: p.Item})
+			}
+		} else if p.State != "" {
+			d.MQTT.Properties = append(d.MQTT.Properties, config.MQTTTopic{Instance: p.Instance, State: p.State, StatePath: p.StatePath})
+		}
+		addMapping(actType(p.Type), p.Instance, p.Mapping)
+	}
+	if e := in.Error; e != nil && (e.Item != "" || e.State != "") {
+		eb := &config.ErrorBinding{Item: e.Item, State: e.State, StatePath: e.StatePath}
+		for _, m := range e.Mapping {
+			if m.Value != "" && m.Code != "" {
+				eb.Mapping = append(eb.Mapping, config.ErrorPair{Value: m.Value, Code: m.Code})
+			}
+		}
+		if len(eb.Mapping) > 0 {
+			d.Error = eb
 		}
 	}
 	return d
@@ -250,16 +330,45 @@ func toInput(d config.Device, roomID string) deviceInput {
 		}
 	}
 
-	in := deviceInput{Name: d.Name, Type: d.Type, RoomID: roomID, Description: d.Description}
-	for _, c := range d.Capabilities {
-		inst, _ := c.Parameters["instance"].(string)
-		if inst == "" {
-			inst = defaultInstance(c.Type)
+	in := deviceInput{Name: d.Name, Type: d.Type, Transport: d.Transport, RoomID: roomID, Description: d.Description}
+	if d.Error != nil {
+		ei := &errorInput{Item: d.Error.Item, State: d.Error.State, StatePath: d.Error.StatePath}
+		for _, p := range d.Error.Mapping {
+			ei.Mapping = append(ei.Mapping, errorPair{Value: p.Value, Code: p.Code})
 		}
+		in.Error = ei
+	}
+
+	if d.Transport == "openhab" {
+		itemByKey := map[string]string{}
+		for _, b := range d.OpenHAB {
+			itemByKey[b.Kind+"|"+b.Instance] = b.Item
+		}
+		for _, c := range d.Capabilities {
+			inst := capInstance(c)
+			in.Capabilities = append(in.Capabilities, capInput{
+				Type: c.Type, Instance: inst, Retrievable: c.Retrievable, Reportable: c.Reportable,
+				Params: c.Parameters, Item: itemByKey["cap|"+inst], Invert: c.Invert,
+				Mapping: mappings[actType(c.Type)+"|"+inst],
+			})
+		}
+		for _, p := range d.Properties {
+			inst, _ := p.Parameters["instance"].(string)
+			in.Properties = append(in.Properties, capInput{
+				Type: p.Type, Instance: inst, Retrievable: p.Retrievable, Reportable: p.Reportable,
+				Params: p.Parameters, Item: itemByKey["prop|"+inst],
+				Mapping: mappings[actType(p.Type)+"|"+inst],
+			})
+		}
+		return in
+	}
+
+	for _, c := range d.Capabilities {
+		inst := capInstance(c)
 		t := setByInst[inst]
 		in.Capabilities = append(in.Capabilities, capInput{
 			Type: c.Type, Instance: inst, Retrievable: c.Retrievable, Reportable: c.Reportable,
-			Params: c.Parameters, Set: t.Set, State: t.State,
+			Params: c.Parameters, Set: t.Set, State: t.State, StatePath: t.StatePath, Invert: c.Invert,
 			Mapping: mappings[actType(c.Type)+"|"+inst],
 		})
 	}
@@ -268,11 +377,41 @@ func toInput(d config.Device, roomID string) deviceInput {
 		t := stateByInst[inst]
 		in.Properties = append(in.Properties, capInput{
 			Type: p.Type, Instance: inst, Retrievable: p.Retrievable, Reportable: p.Reportable,
-			Params: p.Parameters, State: t.State,
+			Params: p.Parameters, State: t.State, StatePath: t.StatePath,
+			Mapping: mappings[actType(p.Type)+"|"+inst],
 		})
 	}
 	return in
 }
+
+// capInstance returns a capability's instance for prefill. color_setting keeps
+// its instance in the shape of its parameters (temperature_k/color_model/scene),
+// not in an "instance" key, so it needs its own derivation.
+func capInstance(c config.Capability) string {
+	if inst, _ := c.Parameters["instance"].(string); inst != "" {
+		return inst
+	}
+	if actType(c.Type) == "color_setting" {
+		return colorInstance(c.Parameters)
+	}
+	return defaultInstance(c.Type)
+}
+
+// colorInstance derives a color_setting capability's instance from its params.
+func colorInstance(p map[string]any) string {
+	switch {
+	case hasKey(p, "temperature_k"):
+		return "temperature_k"
+	case p["color_model"] == "rgb", hasKey(p, "rgb"):
+		return "rgb"
+	case hasKey(p, "color_scene"), hasKey(p, "scene"):
+		return "scene"
+	default:
+		return "hsv" // color_model hsv or unspecified
+	}
+}
+
+func hasKey(m map[string]any, k string) bool { _, ok := m[k]; return ok }
 
 func actType(t string) string {
 	parts := strings.Split(t, ".")
@@ -283,8 +422,11 @@ func actType(t string) string {
 }
 
 func defaultInstance(capType string) string {
-	if actType(capType) == "on_off" {
+	switch actType(capType) {
+	case "on_off":
 		return "on"
+	case "color_setting":
+		return "hsv" // discovery color drafts use hsv; user can adjust
 	}
 	return ""
 }

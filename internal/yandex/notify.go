@@ -14,7 +14,10 @@ import (
 	"github.com/dakhar/yandex2mqtt/internal/device"
 )
 
-const callbackURL = "https://dialogs.yandex.net/api/v1/skills/%s/callback/state"
+const (
+	callbackURL          = "https://dialogs.yandex.net/api/v1/skills/%s/callback/state"
+	discoveryCallbackURL = "https://dialogs.yandex.net/api/v1/skills/%s/callback/discovery"
+)
 
 // Notifier pushes device state changes to the Yandex callback API.
 type Notifier struct {
@@ -68,6 +71,7 @@ type notifyDevice struct {
 	ID           string            `json:"id"`
 	Capabilities []device.CapState `json:"capabilities,omitempty"`
 	Properties   []device.CapState `json:"properties,omitempty"`
+	ErrorCode    string            `json:"error_code,omitempty"`
 }
 
 // OnUpdate is the mqtt.UpdateHook: it fires a callback for the changed instance.
@@ -77,13 +81,18 @@ func (n *Notifier) OnUpdate(d *device.Device, instance string, _ bool) {
 		return
 	}
 	q := d.QueryState()
-	dev := notifyDevice{
-		ID:           d.ID,
-		Capabilities: filterByInstance(q.Capabilities, instance),
-		Properties:   filterByInstance(q.Properties, instance),
-	}
-	if len(dev.Capabilities) == 0 && len(dev.Properties) == 0 {
-		return
+	dev := notifyDevice{ID: d.ID}
+	if instance == device.ErrorInstance {
+		// Status changed: report full state + error_code (empty code clears it).
+		dev.Capabilities = q.Capabilities
+		dev.Properties = q.Properties
+		dev.ErrorCode = d.ErrorCode()
+	} else {
+		dev.Capabilities = filterByInstance(q.Capabilities, instance)
+		dev.Properties = filterByInstance(q.Properties, instance)
+		if len(dev.Capabilities) == 0 && len(dev.Properties) == 0 {
+			return
+		}
 	}
 	body := notifyBody{
 		TS: time.Now().Unix(),
@@ -93,10 +102,34 @@ func (n *Notifier) OnUpdate(d *device.Device, instance string, _ bool) {
 		},
 	}
 	// Fire-and-forget so MQTT message handling isn't blocked on HTTP.
-	go n.post(body)
+	go n.sendJSON(fmt.Sprintf(callbackURL, n.skillID), body)
 }
 
-func (n *Notifier) post(body notifyBody) {
+// discoveryBody is the /callback/discovery payload: it carries only the user
+// whose device list changed; Yandex responds by re-requesting get-devices.
+type discoveryBody struct {
+	TS      int64 `json:"ts"`
+	Payload struct {
+		UserID string `json:"user_id"`
+	} `json:"payload"`
+}
+
+// NotifyDiscovery tells Yandex a user's device list changed so Alice re-syncs
+// it without the user manually refreshing the skill. Nil-safe.
+func (n *Notifier) NotifyDiscovery(userID string) {
+	if n == nil {
+		return
+	}
+	if userID == "" {
+		userID = n.userID
+	}
+	var body discoveryBody
+	body.TS = time.Now().Unix()
+	body.Payload.UserID = userID
+	go n.sendJSON(fmt.Sprintf(discoveryCallbackURL, n.skillID), body)
+}
+
+func (n *Notifier) sendJSON(url string, body any) {
 	buf, err := json.Marshal(body)
 	if err != nil {
 		n.log.Error("notify marshal", "err", err)
@@ -105,7 +138,6 @@ func (n *Notifier) post(body notifyBody) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	url := fmt.Sprintf(callbackURL, n.skillID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(buf))
 	if err != nil {
 		n.log.Error("notify request", "err", err)
@@ -121,10 +153,9 @@ func (n *Notifier) post(body notifyBody) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		n.log.Warn("notify non-2xx", "status", resp.StatusCode)
+		n.log.Warn("notify non-2xx", "status", resp.StatusCode, "url", url)
 		return
 	}
-	n.log.Debug("notify sent", "device", body.Payload.Devices[0].ID)
 }
 
 func filterByInstance(states []device.CapState, instance string) []device.CapState {

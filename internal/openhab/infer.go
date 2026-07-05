@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/dakhar/yandex2mqtt/internal/config"
+	"github.com/dakhar/yandex2mqtt/internal/device"
 )
 
 // This file maps openHAB's semantic model (Point role + Property + Equipment
@@ -46,6 +47,12 @@ func propertyTag(tags []string) string {
 	return ""
 }
 
+// isSemanticPoint reports whether openHAB classifies the item as a Point (rather
+// than Equipment) via its semantics metadata — authoritative over tag guessing.
+func isSemanticPoint(it ohItem) bool {
+	return strings.HasPrefix(it.Meta["semantics"].Value, "Point_")
+}
+
 func hasTag(tags []string, want string) bool {
 	for _, t := range tags {
 		if t == want {
@@ -84,9 +91,18 @@ func isLocation(tags []string) bool {
 // bare Setpoint Dimmer is a volume inside a media device, brightness inside a
 // light). Empty result = unsupported item.
 func featuresForItem(it ohItem, ctxType string) ([]feature, string) {
+	// yahome metadata is an explicit override: it wins over tag inference.
+	if f, dt, ok := yahomeFeatures(it); ok {
+		return f, dt
+	}
 	role := pointRole(it.Tags)
 	prop := propertyTag(it.Tags)
 	base, _, _ := strings.Cut(it.Type, ":")
+	// A Group used as a Point (Group:Switch/Dimmer/Color aggregating several
+	// items) is treated by its base groupType.
+	if base == "Group" && it.GroupType != "" {
+		base, _, _ = strings.Cut(it.GroupType, ":")
+	}
 
 	// Sensor-event points (boolean-ish items) — a Motion "Switch" is an event,
 	// not an on_off. Preempts the raw item type.
@@ -98,7 +114,17 @@ func featuresForItem(it ohItem, ctxType string) ([]feature, string) {
 
 	switch base {
 	case "Switch":
+		// A light on a non-light appliance (e.g. a range-hood lamp) becomes a
+		// backlight toggle, so it doesn't collide with the appliance's own on_off.
+		if prop == "Light" && ctxType != "" && !strings.HasPrefix(ctxType, "devices.types.light") {
+			return []feature{capFeat("backlight", capToggle("backlight"), it.Name)}, ctxType
+		}
 		return []feature{capFeat("on", capOnOff(), it.Name)}, deviceTypeFor(it.Tags, "devices.types.switch")
+	case "String":
+		// A String speed setpoint (options like off/low/medium/high) -> fan_speed.
+		if hasTag(it.Tags, "Speed") {
+			return []feature{stringFanSpeed(it)}, "devices.types.ventilation.fan"
+		}
 	case "Dimmer":
 		return dimmerFeatures(it, ctxType)
 	case "Color":
@@ -108,9 +134,16 @@ func featuresForItem(it ohItem, ctxType string) ([]feature, string) {
 			capFeat("hsv", capColorHSV(), it.Name),
 		}, "devices.types.light"
 	case "Rollershutter":
+		// on_off drives open/close; a Rollershutter expects UP/DOWN, not ON/OFF.
+		onoff := capFeat("on", capOnOff(), it.Name)
+		onoff.mapY = []any{true, false}
+		onoff.mapO = []any{"UP", "DOWN"}
+		// openHAB Rollershutter counts 0% = open, so invert vs Yandex (100% = open).
+		openCap := capRange("open", "unit.percent", 0, 100, 1)
+		openCap.Invert = true
 		return []feature{
-			capFeat("open", capRange("open", "unit.percent", 0, 100, 1), it.Name),
-			capFeat("on", capOnOff(), it.Name),
+			capFeat("open", openCap, it.Name),
+			onoff,
 		}, "devices.types.openable.curtain"
 	case "Contact":
 		return []feature{propFeat("open", propEvent("open", "opened", "closed"), it.Name)}, "devices.types.sensor.open"
@@ -131,7 +164,14 @@ func dimmerFeatures(it ohItem, ctxType string) ([]feature, string) {
 		return []feature{capFeat("volume", capRange("volume", "unit.percent", 0, 100, 1), it.Name)}, "devices.types.media_device"
 	}
 	tempSet := func(dt string) ([]feature, string) {
-		return []feature{capFeat("temperature", capRange("temperature", "unit.temperature.celsius", 10, 30, 0.5), it.Name)}, dt
+		min, max, prec := rangeParams(it, 10, 30, 0.5)
+		return []feature{capFeat("temperature", capRange("temperature", "unit.temperature.celsius", min, max, prec), it.Name)}, dt
+	}
+	colorTemp := func() ([]feature, string) {
+		return []feature{
+			capFeat("on", capOnOff(), it.Name),
+			capFeat("temperature_k", capColorTempK(2700, 6500), it.Name),
+		}, deviceTypeFor(it.Tags, "devices.types.light")
 	}
 	position := func(dt string) ([]feature, string) {
 		return []feature{capFeat("open", capRange("open", "unit.percent", 0, 100, 1), it.Name), capFeat("on", capOnOff(), it.Name)}, dt
@@ -143,6 +183,10 @@ func dimmerFeatures(it ohItem, ctxType string) ([]feature, string) {
 		return volume()
 	case "Brightness":
 		return dimLight()
+	case "Speed":
+		return []feature{fanSpeedFeature(it)}, "devices.types.ventilation.fan"
+	case "ColorTemperature":
+		return colorTemp()
 	case "Temperature":
 		return tempSet("devices.types.thermostat")
 	case "OpenLevel", "Position", "Opening":
@@ -210,7 +254,8 @@ func numberFeature(it ohItem, role, prop, ctxType string) ([]feature, string) {
 	switch prop {
 	case "Temperature":
 		if setpoint {
-			return f(capFeat("temperature", capRange("temperature", "unit.temperature.celsius", 10, 30, 0.5), it.Name), "devices.types.thermostat")
+			min, max, prec := rangeParams(it, 10, 30, 0.5)
+			return f(capFeat("temperature", capRange("temperature", "unit.temperature.celsius", min, max, prec), it.Name), "devices.types.thermostat")
 		}
 		return fl("temperature", "unit.temperature.celsius", "devices.types.sensor.climate")
 	case "Humidity", "Moisture":
@@ -247,6 +292,10 @@ func numberFeature(it ohItem, role, prop, ctxType string) ([]feature, string) {
 		if setpoint {
 			return f(capFeat("brightness", capBrightness(), it.Name), "devices.types.light")
 		}
+	case "Speed":
+		if setpoint {
+			return []feature{fanSpeedFeature(it)}, "devices.types.ventilation.fan"
+		}
 	}
 	return nil, ""
 }
@@ -265,9 +314,13 @@ func equipmentType(tags []string) string {
 	for _, t := range tags {
 		switch t {
 		// lighting
-		case "LightSource", "Lightbulb", "Lamp", "LightStrip", "LightStripe", "Pendant",
-			"Sconce", "Chandelier", "Downlight", "FloodLight", "SpotLight", "TrackLight",
-			"WallLight", "AccentLight", "Light", "Ceiling":
+		case "Chandelier", "Ceiling":
+			return "devices.types.light.ceiling"
+		case "LightStrip", "LightStripe":
+			return "devices.types.light.strip"
+		case "LightSource", "Lightbulb", "Lamp", "Pendant",
+			"Sconce", "Downlight", "FloodLight", "SpotLight", "TrackLight",
+			"WallLight", "AccentLight", "Light":
 			return "devices.types.light"
 		// electrics
 		case "PowerOutlet", "WallOutlet":
@@ -365,6 +418,132 @@ func capRange(instance, unit string, min, max, precision float64) config.Capabil
 			"instance": instance, "unit": unit,
 			"range": map[string]any{"min": min, "max": max, "precision": precision},
 		},
+	}
+}
+
+// capActType extracts a capability's act-type ("devices.capabilities.mode" ->
+// "mode") for value-mapping grouping.
+func capActType(capType string) string {
+	p := strings.Split(capType, ".")
+	if len(p) >= 3 {
+		return p[2]
+	}
+	return ""
+}
+
+// rangeParams derives a range capability's min/max/precision from an item's
+// stateDescription, falling back to the supplied defaults. Used for real-unit
+// setpoints (temperature); percent instances keep 0-100.
+func rangeParams(it ohItem, dMin, dMax, dPrec float64) (float64, float64, float64) {
+	min, max, prec := dMin, dMax, dPrec
+	if sd := it.StateDesc; sd != nil {
+		if sd.Minimum != nil {
+			min = *sd.Minimum
+		}
+		if sd.Maximum != nil {
+			max = *sd.Maximum
+		}
+		if sd.Step != nil && *sd.Step > 0 {
+			prec = *sd.Step
+		}
+	}
+	return min, max, prec
+}
+
+// stringFanSpeed builds a fan_speed mode capability from a String item's options
+// (off/low/medium/high). Option values that are valid Yandex fan_speed modes map
+// to themselves; others (e.g. "off") are dropped — power is the on_off.
+func stringFanSpeed(it ohItem) feature {
+	valid := map[string]bool{}
+	for _, m := range device.RecommendedModes("fan_speed") {
+		valid[m] = true
+	}
+	var modes []string
+	if it.StateDesc != nil {
+		for _, o := range it.StateDesc.Options {
+			if valid[o.Value] {
+				modes = append(modes, o.Value)
+			}
+		}
+	}
+	if len(modes) == 0 {
+		modes = device.RecommendedModes("fan_speed")
+	}
+	return capFeat("fan_speed", capMode("fan_speed", modes), it.Name)
+}
+
+// fanSpeedFeature builds a fan_speed mode capability, deriving the mode set and a
+// value mapping (mode <-> device number) from the item's numeric stateDescription.
+func fanSpeedFeature(it ohItem) feature {
+	modes, mapY, mapO := fanSpeedModes(it.StateDesc)
+	f := capFeat("fan_speed", capMode("fan_speed", modes), it.Name)
+	f.mapY, f.mapO = mapY, mapO
+	return f
+}
+
+// fanSpeedModes maps a numeric speed range onto intensity-ordered fan_speed
+// modes with a value mapping. A 0 minimum is treated as "off" (power is handled
+// by on_off) and skipped. With no usable range it falls back to the recommended
+// modes and no mapping (the user maps values in the builder).
+func fanSpeedModes(sd *ohStateDesc) (modes []string, mapY, mapO []any) {
+	intensity := []string{"low", "medium", "high", "turbo"}
+	fallback := func() ([]string, []any, []any) { return device.RecommendedModes("fan_speed"), nil, nil }
+	if sd == nil || sd.Minimum == nil || sd.Maximum == nil {
+		return fallback()
+	}
+	step := 1.0
+	if sd.Step != nil && *sd.Step > 0 {
+		step = *sd.Step
+	}
+	min := *sd.Minimum
+	if min == 0 {
+		min = step // 0 == off, controlled via on_off
+	}
+	var values []float64
+	for v := min; v <= *sd.Maximum+1e-9; v += step {
+		values = append(values, v)
+	}
+	if len(values) < 1 || len(values) > len(intensity) {
+		return fallback()
+	}
+	for i, v := range values {
+		modes = append(modes, intensity[i])
+		mapY = append(mapY, intensity[i])
+		mapO = append(mapO, numClean(v))
+	}
+	return modes, mapY, mapO
+}
+
+// numClean renders a whole float as an int (1, not 1.0) for clean value mapping.
+func numClean(v float64) any {
+	if v == float64(int64(v)) {
+		return int64(v)
+	}
+	return v
+}
+
+func capMode(instance string, modes []string) config.Capability {
+	ms := make([]any, len(modes))
+	for i, m := range modes {
+		ms[i] = map[string]any{"value": m}
+	}
+	return config.Capability{
+		Type: "devices.capabilities.mode", Retrievable: true, Reportable: true,
+		Parameters: map[string]any{"instance": instance, "modes": ms},
+	}
+}
+
+func capToggle(instance string) config.Capability {
+	return config.Capability{
+		Type: "devices.capabilities.toggle", Retrievable: true, Reportable: true,
+		Parameters: map[string]any{"instance": instance},
+	}
+}
+
+func capColorTempK(min, max int) config.Capability {
+	return config.Capability{
+		Type: "devices.capabilities.color_setting", Retrievable: true, Reportable: true,
+		Parameters: map[string]any{"temperature_k": map[string]any{"min": min, "max": max}},
 	}
 }
 

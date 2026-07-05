@@ -55,8 +55,32 @@ func (r *CatalogRepo) LoadAll(ctx context.Context) ([]config.Device, error) {
 		if devices[i].OpenHAB, err = r.loadOpenHABBindings(ctx, id); err != nil {
 			return nil, err
 		}
+		if devices[i].Error, err = r.loadErrorBinding(ctx, id); err != nil {
+			return nil, err
+		}
 	}
 	return devices, nil
+}
+
+// loadErrorBinding loads the device's status->error_code binding (nil if none).
+func (r *CatalogRepo) loadErrorBinding(ctx context.Context, deviceID string) (*config.ErrorBinding, error) {
+	var b config.ErrorBinding
+	var mapping string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT item, state_topic, state_path, mapping FROM device_errors WHERE device_id = ?`, deviceID).
+		Scan(&b.Item, &b.State, &b.StatePath, &mapping)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if mapping != "" {
+		if err := json.Unmarshal([]byte(mapping), &b.Mapping); err != nil {
+			return nil, err
+		}
+	}
+	return &b, nil
 }
 
 func (r *CatalogRepo) loadOpenHABBindings(ctx context.Context, deviceID string) ([]config.OpenHABBinding, error) {
@@ -111,12 +135,15 @@ func (r *CatalogRepo) GetDevice(ctx context.Context, userID, id string) (config.
 	if d.ValueMapping, err = r.loadValueMappings(ctx, id); err != nil {
 		return config.Device{}, "", false, err
 	}
+	if d.Error, err = r.loadErrorBinding(ctx, id); err != nil {
+		return config.Device{}, "", false, err
+	}
 	return d, roomID, true, nil
 }
 
 func (r *CatalogRepo) loadCapProps(ctx context.Context, table, deviceID string) ([]config.Capability, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT type, retrievable, reportable, params FROM `+table+
+		`SELECT type, retrievable, reportable, params, invert FROM `+table+
 			` WHERE device_id = ? ORDER BY ord, id`, deviceID)
 	if err != nil {
 		return nil, err
@@ -127,7 +154,7 @@ func (r *CatalogRepo) loadCapProps(ctx context.Context, table, deviceID string) 
 	for rows.Next() {
 		var c config.Capability
 		var params sql.NullString
-		if err := rows.Scan(&c.Type, &c.Retrievable, &c.Reportable, &params); err != nil {
+		if err := rows.Scan(&c.Type, &c.Retrievable, &c.Reportable, &params, &c.Invert); err != nil {
 			return nil, err
 		}
 		if params.Valid && params.String != "" {
@@ -159,7 +186,7 @@ func toProperties(caps []config.Capability) []config.Property {
 
 func (r *CatalogRepo) loadTopics(ctx context.Context, deviceID string) (config.MQTTMapping, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT kind, instance, set_topic, state_topic FROM mqtt_topics
+		`SELECT kind, instance, set_topic, state_topic, state_path FROM mqtt_topics
 		 WHERE device_id = ? ORDER BY ord, id`, deviceID)
 	if err != nil {
 		return config.MQTTMapping{}, err
@@ -170,7 +197,7 @@ func (r *CatalogRepo) loadTopics(ctx context.Context, deviceID string) (config.M
 	for rows.Next() {
 		var kind string
 		var t config.MQTTTopic
-		if err := rows.Scan(&kind, &t.Instance, &t.Set, &t.State); err != nil {
+		if err := rows.Scan(&kind, &t.Instance, &t.Set, &t.State, &t.StatePath); err != nil {
 			return config.MQTTMapping{}, err
 		}
 		if kind == "prop" {

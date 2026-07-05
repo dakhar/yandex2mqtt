@@ -37,6 +37,9 @@ type Device struct {
 	// Transport-agnostic wiring (built from MQTT topics or openHAB items).
 	cmdTarget     map[string]string // instance -> command target (topic/item)
 	stateBindings []StateBinding
+	invert        map[string]bool   // range instance -> invert percentage
+	errorMap      map[string]string // raw status value -> Yandex error_code
+	errorCode     string            // current device-level error_code ("" = none)
 
 	publish PublishFunc
 	log     *slog.Logger
@@ -56,6 +59,7 @@ type propState struct {
 	Reportable  bool
 	Parameters  map[string]any
 	cur         *State
+	seen        bool // a real value has arrived (cur is not just the init default)
 }
 
 // New builds a Device from its config definition. publish may be nil (e.g. in
@@ -84,6 +88,7 @@ func New(c config.Device, publish PublishFunc, log *slog.Logger) *Device {
 	if len(d.AllowedUsers) == 0 {
 		d.AllowedUsers = []string{"1"}
 	}
+	d.invert = map[string]bool{}
 	for _, c := range c.Capabilities {
 		d.capabilities = append(d.capabilities, &capState{
 			Type:        c.Type,
@@ -92,6 +97,11 @@ func New(c config.Device, publish PublishFunc, log *slog.Logger) *Device {
 			Parameters:  c.Parameters,
 			cur:         initState(c.Type, c.Parameters),
 		})
+		if c.Invert && actTypeOf(c.Type) == "range" {
+			if inst, _ := c.Parameters["instance"].(string); inst != "" {
+				d.invert[inst] = true
+			}
+		}
 	}
 	for _, p := range c.Properties {
 		d.properties = append(d.properties, &propState{
@@ -173,14 +183,17 @@ func (d *Device) Definition() Definition {
 
 // QueryState returns the current retrievable state for the query response.
 func (d *Device) QueryState() QueryResult {
-	r := QueryResult{ID: d.ID}
+	r := QueryResult{ID: d.ID, ErrorCode: d.errorCode}
 	for _, c := range d.capabilities {
 		if c.Retrievable && c.cur != nil {
 			r.Capabilities = append(r.Capabilities, CapState{Type: c.Type, State: c.cur})
 		}
 	}
 	for _, p := range d.properties {
-		if p.Retrievable && p.cur != nil {
+		// A sensor (float/event) is only reported once a real value has arrived, so
+		// an uninitialized openHAB item (state NULL) doesn't surface a fake reading
+		// (0 °C, no-event) to Yandex. Controllable capabilities keep their default.
+		if p.Retrievable && p.cur != nil && p.seen {
 			r.Properties = append(r.Properties, CapState{Type: p.Type, State: p.cur})
 		}
 	}
@@ -205,13 +218,23 @@ func (d *Device) SetCapabilityState(val any, capType, instance string, relative 
 
 	cap.cur = &State{Instance: instance, Value: value}
 
+	// An inverted range sends the flipped percentage to the device (cur keeps the
+	// Yandex-facing value). A relative change flips sign.
+	invert := actType == "range" && d.invert[instance]
+
 	var message string
 	if instance == "temperature_k" {
 		min, max := tempRange(cap.Parameters)
 		divider := (max - min) / 100
 		message = strconv.Itoa(int(math.Floor((toFloatOr(value, 0) - min) / divider)))
 	} else if relative {
-		message = relativeMessage(value)
+		rv := value
+		if invert {
+			rv = -toFloatOr(value, 0)
+		}
+		message = relativeMessage(rv)
+	} else if invert {
+		message = num2str(invertRange(value, cap.Parameters))
 	} else {
 		message = num2str(value)
 	}
@@ -228,6 +251,11 @@ func (d *Device) SetCapabilityState(val any, capType, instance string, relative 
 // UpdateFromMQTT applies an incoming MQTT message to the matching capability or
 // property. Port of updateState in device.js.
 func (d *Device) UpdateFromMQTT(val string, instance string, isProp bool) {
+	// The status source maps to a device-level error_code (unmapped = no error).
+	if instance == ErrorInstance {
+		d.errorCode = d.errorMap[val]
+		return
+	}
 	colorInstances := map[string]bool{
 		"temperature_k": true, "hsv": true, "rgb": true, "scene": true,
 		"color_model": true, "color_scene": true,
@@ -246,7 +274,7 @@ func (d *Device) UpdateFromMQTT(val string, instance string, isProp bool) {
 			return
 		}
 		typ, params = p.Type, p.Parameters
-		set = func(s *State) { p.cur = s }
+		set = func(s *State) { p.cur = s; p.seen = true }
 	case colorInstances[instance]:
 		c := d.findCapByType("devices.capabilities.color_setting")
 		if c == nil {
@@ -267,7 +295,11 @@ func (d *Device) UpdateFromMQTT(val string, instance string, isProp bool) {
 
 	actType := actTypeOf(typ)
 	mapped := d.mapValue(val, actType, instance, false)
-	set(&State{Instance: instance, Value: convertToYandexValue(mapped, actType, instance, params)})
+	yv := convertToYandexValue(mapped, actType, instance, params)
+	if actType == "range" && d.invert[instance] {
+		yv = invertRange(yv, params)
+	}
+	set(&State{Instance: instance, Value: yv})
 }
 
 // --- lookups ---
@@ -315,12 +347,20 @@ func (d *Device) findPropByInstance(instance string) *propState {
 // (the bridge needs the devices before it can offer a publisher).
 func (d *Device) SetPublisher(p PublishFunc) { d.publish = p }
 
+// ErrorInstance is the reserved state-binding instance carrying a device's
+// status source, mapped to Yandex's device-level error_code.
+const ErrorInstance = "__error__"
+
+// ErrorCode returns the device's current Yandex error_code ("" = no error).
+func (d *Device) ErrorCode() string { return d.errorCode }
+
 // StateBinding ties a capability/property instance to its external state source
 // (an MQTT state topic or an openHAB item), for connectors to subscribe to.
 type StateBinding struct {
 	Instance string
 	Source   string
 	IsProp   bool
+	Path     string // optional JSON dot-path into the payload (MQTT only)
 }
 
 // StateBindings returns the device's inbound state sources (transport-agnostic).
@@ -330,8 +370,25 @@ func (d *Device) StateBindings() []StateBinding { return d.stateBindings }
 // bindings from the device's MQTT topics or openHAB items.
 func (d *Device) buildBindings(c config.Device) {
 	d.cmdTarget = map[string]string{}
+	// Device status -> error_code (works for both transports).
+	if c.Error != nil {
+		d.errorMap = map[string]string{}
+		for _, m := range c.Error.Mapping {
+			d.errorMap[m.Value] = m.Code
+		}
+		src, path := c.Error.State, c.Error.StatePath
+		if d.Transport == "openhab" {
+			src, path = c.Error.Item, ""
+		}
+		if src != "" {
+			d.stateBindings = append(d.stateBindings, StateBinding{Instance: ErrorInstance, Source: src, IsProp: true, Path: path})
+		}
+	}
 	if d.Transport == "openhab" {
 		for _, b := range c.OpenHAB {
+			if b.Kind == "equipment" {
+				continue // identity marker, not a state/command source
+			}
 			if b.Kind == "prop" {
 				d.stateBindings = append(d.stateBindings, StateBinding{Instance: b.Instance, Source: b.Item, IsProp: true})
 				continue
@@ -347,12 +404,12 @@ func (d *Device) buildBindings(c config.Device) {
 			d.cmdTarget[t.Instance] = t.Set
 		}
 		if t.State != "" {
-			d.stateBindings = append(d.stateBindings, StateBinding{Instance: t.Instance, Source: t.State, IsProp: false})
+			d.stateBindings = append(d.stateBindings, StateBinding{Instance: t.Instance, Source: t.State, IsProp: false, Path: t.StatePath})
 		}
 	}
 	for _, t := range c.MQTT.Properties {
 		if t.State != "" {
-			d.stateBindings = append(d.stateBindings, StateBinding{Instance: t.Instance, Source: t.State, IsProp: true})
+			d.stateBindings = append(d.stateBindings, StateBinding{Instance: t.Instance, Source: t.State, IsProp: true, Path: t.StatePath})
 		}
 	}
 }
@@ -436,6 +493,21 @@ func rangeMin(params map[string]any) float64 {
 		return 0
 	}
 	return toFloatOr(r["min"], 0)
+}
+
+// invertRange flips a value within its range bounds (min+max - v), e.g. a
+// Rollershutter percentage where the device and Yandex count from opposite ends.
+func invertRange(v any, params map[string]any) any {
+	f, err := toFloat(v)
+	if err != nil {
+		return v
+	}
+	min, max := 0.0, 100.0
+	if r, ok := params["range"].(map[string]any); ok {
+		min = toFloatOr(r["min"], 0)
+		max = toFloatOr(r["max"], 100)
+	}
+	return min + max - f
 }
 
 func hasKey(m map[string]any, k string) bool {

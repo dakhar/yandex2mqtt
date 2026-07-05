@@ -14,11 +14,34 @@ import (
 const DiscoveryTag = "ya2mqtt"
 
 type ohItem struct {
-	Name       string   `json:"name"`
-	Type       string   `json:"type"`
-	Label      string   `json:"label"`
-	Tags       []string `json:"tags"`
-	GroupNames []string `json:"groupNames"` // parent groups (openHAB semantic hierarchy)
+	Name       string            `json:"name"`
+	Type       string            `json:"type"`
+	GroupType  string            `json:"groupType"` // base type when Type=="Group" (Group:Switch etc.)
+	Label      string            `json:"label"`
+	Tags       []string          `json:"tags"`
+	GroupNames []string          `json:"groupNames"` // parent groups (openHAB semantic hierarchy)
+	Meta       map[string]ohMeta `json:"metadata"`   // e.g. "yahome" override, "ga"
+	StateDesc  *ohStateDesc      `json:"stateDescription"`
+}
+
+// ohMeta is one openHAB metadata namespace entry (value + config key/values).
+type ohMeta struct {
+	Value  string         `json:"value"`
+	Config map[string]any `json:"config"`
+}
+
+// ohStateDesc is an item's state description: numeric bounds (for range/mode
+// value derivation) and enumerated options.
+type ohStateDesc struct {
+	Minimum *float64   `json:"minimum"`
+	Maximum *float64   `json:"maximum"`
+	Step    *float64   `json:"step"`
+	Options []ohOption `json:"options"`
+}
+
+type ohOption struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
 }
 
 // feature is one capability or property inferred from an item, with the item it
@@ -29,16 +52,26 @@ type feature struct {
 	cap      config.Capability
 	prop     config.Property
 	item     string
+	// Optional value mapping for this instance (e.g. fan_speed mode <-> device
+	// number): mapY is the Yandex column, mapO the openHAB column.
+	mapY []any
+	mapO []any
 }
 
 // Discover reads the openHAB item model and returns device drafts. tag, when
 // non-empty, restricts which items/equipment are exposed (empty = all items).
-func (c *Connector) Discover(ctx context.Context, tag string) ([]config.Device, error) {
+func (c *Connector) Discover(ctx context.Context, tag string, flat bool) ([]config.Device, error) {
+	if !c.configured() {
+		return nil, fmt.Errorf("openHAB не настроен — задайте URL и токен в настройках")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	var items []ohItem
-	if err := c.getJSON(ctx, "/rest/items?fields=name,type,label,tags,groupNames", &items); err != nil {
+	if err := c.getJSON(ctx, "/rest/items?metadata=yahome,semantics&fields=name,type,groupType,label,tags,groupNames,metadata,stateDescription", &items); err != nil {
 		return nil, err
+	}
+	if flat {
+		return inferDevicesFlat(items, tag), nil
 	}
 	return inferDevices(items, tag), nil
 }
@@ -75,15 +108,31 @@ func inferDevices(items []ohItem, tag string) []config.Device {
 		if it.Type != "Group" || equipmentType(it.Tags) == "" || !candidate(it) {
 			continue
 		}
+		// A Group that openHAB marks as a Point (an aggregation like Group:Switch
+		// tagged Light) is a member, not an equipment — skip it here.
+		if consumed[it.Name] || isSemanticPoint(it) {
+			continue
+		}
 		d, ok := draftForGroup(it, children[it.Name])
 		if !ok {
 			continue
 		}
 		d.Room = roomOf(it)
 		drafts = append(drafts, d)
-		for _, m := range children[it.Name] {
-			consumed[m.Name] = true
+		// Consume the whole subtree: direct member Points and, when a Point is an
+		// aggregation Group (Group:Switch etc.), its underlying items too — so none
+		// of them resurface as standalone devices.
+		var consume func(name string)
+		consume = func(name string) {
+			for _, m := range children[name] {
+				if consumed[m.Name] {
+					continue
+				}
+				consumed[m.Name] = true
+				consume(m.Name)
+			}
 		}
+		consume(it.Name)
 	}
 
 	// Pass 2: everything else (standalone items and members of non-Equipment
@@ -97,6 +146,50 @@ func inferDevices(items []ohItem, tag string) []config.Device {
 			continue
 		}
 		d.Room = roomOf(it)
+		drafts = append(drafts, d)
+	}
+	return drafts
+}
+
+// inferDevicesFlat is the "flat tree" mode: every item with a recognized
+// capability becomes its own device, with no equipment composition. Leaves of an
+// aggregation Group (Group:Switch etc.) are skipped in favour of the group, and
+// Locations still set the room.
+func inferDevicesFlat(items []ohItem, tag string) []config.Device {
+	byName := make(map[string]ohItem, len(items))
+	locName := map[string]string{}
+	aggregation := map[string]bool{} // Group:X aggregation groups represent their leaves
+	for _, it := range items {
+		byName[it.Name] = it
+		if it.Type == "Group" && isLocation(it.Tags) {
+			locName[it.Name] = itemLabel(it)
+		}
+		if it.GroupType != "" {
+			aggregation[it.Name] = true
+		}
+	}
+	candidate := func(it ohItem) bool { return tag == "" || hasTag(it.Tags, tag) }
+
+	var drafts []config.Device
+	for _, it := range items {
+		if !candidate(it) {
+			continue
+		}
+		leaf := false
+		for _, g := range it.GroupNames {
+			if aggregation[g] {
+				leaf = true
+				break
+			}
+		}
+		if leaf {
+			continue
+		}
+		d, ok := draftForItem(it)
+		if !ok {
+			continue
+		}
+		d.Room = resolveRoom(it, byName, locName)
 		drafts = append(drafts, d)
 	}
 	return drafts
@@ -127,7 +220,7 @@ func resolveRoom(it ohItem, byName map[string]ohItem, locName map[string]string)
 }
 
 func (c *Connector) getJSON(ctx context.Context, path string, v any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base()+path, nil)
 	if err != nil {
 		return err
 	}
@@ -162,35 +255,89 @@ func draftForGroup(g ohItem, members []ohItem) (config.Device, bool) {
 	if dtype == "" {
 		return config.Device{}, false
 	}
-	var feats []feature
-	seen := map[string]bool{}
+	// A thermostat's heater relay (a bare on/off Point) is driven by the
+	// thermostat, not by Alice: its sensors and setpoint are always exposed, but
+	// any on/off or mode control is taken only from members that explicitly opt in
+	// via yahome metadata.
+	thermostat := dtype == "devices.types.thermostat" || dtype == "devices.types.thermostat.ac"
+
+	// De-duplicate features by kind|instance, but prefer a member with an explicit
+	// Property tag (or yahome) over one mapped by a fallback default, so a real
+	// "Brightness" point wins the brightness slot over an under-tagged helper.
+	type scored struct {
+		f        feature
+		specific bool
+	}
+	best := map[string]scored{}
+	var order []string
 	for _, m := range members {
 		mf, _ := featuresForItem(m, dtype) // members inherit the equipment context
+		if thermostat && !hasYahome(m) {
+			mf = sensorsAndSetpoint(mf)
+		}
+		specific := propertyTag(m.Tags) != "" || hasYahome(m)
 		for _, f := range mf {
 			key := f.kind + "|" + f.instance
-			if seen[key] {
-				continue
+			cur, exists := best[key]
+			switch {
+			case !exists:
+				best[key] = scored{f, specific}
+				order = append(order, key)
+			case specific && !cur.specific:
+				best[key] = scored{f, specific}
 			}
-			seen[key] = true
-			feats = append(feats, f)
 		}
+	}
+	feats := make([]feature, 0, len(order))
+	for _, k := range order {
+		feats = append(feats, best[k].f)
 	}
 	if len(feats) == 0 {
 		return config.Device{}, false
 	}
-	return assemble(itemLabel(g), dtype, feats), true
+	d := assemble(itemLabel(g), dtype, feats)
+	// The Equipment group item is the composite device's stable identity (used by
+	// discovery for display, ignore, and add/configure), distinct from the member
+	// Point items its capabilities bind to. Kept as an "equipment" binding, which
+	// wiring and persistence skip.
+	d.OpenHAB = append([]config.OpenHABBinding{{Kind: "equipment", Item: g.Name}}, d.OpenHAB...)
+	return d, true
+}
+
+// sensorsAndSetpoint keeps only float properties (sensors) and range
+// capabilities (setpoints), dropping on/off and other controls.
+func sensorsAndSetpoint(feats []feature) []feature {
+	var out []feature
+	for _, f := range feats {
+		if f.kind == "prop" && f.prop.Type == "devices.properties.float" ||
+			f.kind == "cap" && f.cap.Type == "devices.capabilities.range" {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 func assemble(name, deviceType string, feats []feature) config.Device {
 	d := config.Device{Name: name, Type: deviceType, Transport: "openhab"}
+	vmIdx := map[string]int{} // actType -> index in d.ValueMapping
 	for _, f := range feats {
 		if f.kind == "prop" {
 			d.Properties = append(d.Properties, f.prop)
 			d.OpenHAB = append(d.OpenHAB, config.OpenHABBinding{Kind: "prop", Instance: f.instance, Item: f.item})
-			continue
+		} else {
+			d.Capabilities = append(d.Capabilities, f.cap)
+			d.OpenHAB = append(d.OpenHAB, config.OpenHABBinding{Kind: "cap", Instance: f.instance, Item: f.item})
 		}
-		d.Capabilities = append(d.Capabilities, f.cap)
-		d.OpenHAB = append(d.OpenHAB, config.OpenHABBinding{Kind: "cap", Instance: f.instance, Item: f.item})
+		if len(f.mapY) > 0 {
+			at := capActType(f.cap.Type)
+			im := config.InstanceMapping{Instance: f.instance, Mapping: [][]any{f.mapY, f.mapO}}
+			if i, ok := vmIdx[at]; ok {
+				d.ValueMapping[i].Mapping = append(d.ValueMapping[i].Mapping, im)
+			} else {
+				vmIdx[at] = len(d.ValueMapping)
+				d.ValueMapping = append(d.ValueMapping, config.ValueMapping{Type: at, Mapping: []config.InstanceMapping{im}})
+			}
+		}
 	}
 	return d
 }

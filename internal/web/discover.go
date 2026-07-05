@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"net/http"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -19,7 +20,7 @@ const defaultDiscoveryTag = "ya2mqtt"
 // Discoverer reads device drafts from openHAB, optionally filtered by a tag
 // ("" = all items). Nil when openHAB isn't configured.
 type Discoverer interface {
-	Discover(ctx context.Context, tag string) ([]config.Device, error)
+	Discover(ctx context.Context, tag string, flat bool) ([]config.Device, error)
 }
 
 // SetDiscovery wires the openHAB discoverer and the per-user settings/ignore
@@ -37,6 +38,30 @@ type draftView struct {
 	Room         string
 	Capabilities []string
 	Properties   []string
+}
+
+// discoveryFlat reports whether the user selected the flat discovery mode.
+func (h *Handlers) discoveryFlat(ctx context.Context, userID string) bool {
+	if h.settings == nil {
+		return false
+	}
+	v, _ := h.settings.GetOr(ctx, userID, store.SettingDiscoveryMode, "semantic")
+	return v == "flat"
+}
+
+// SetDiscoveryMode switches a user between semantic and flat discovery
+// (POST /app/discover/mode).
+func (h *Handlers) SetDiscoveryMode(w http.ResponseWriter, r *http.Request) {
+	u := auth.UserFrom(r.Context())
+	if h.settings != nil {
+		_ = r.ParseForm()
+		mode := r.PostFormValue("mode")
+		if mode != "flat" {
+			mode = "semantic"
+		}
+		_ = h.settings.Set(r.Context(), u.ID, store.SettingDiscoveryMode, mode)
+	}
+	http.Redirect(w, r, "/app/discover", http.StatusFound)
 }
 
 func (h *Handlers) discoveryTag(ctx context.Context, userID string) string {
@@ -60,22 +85,24 @@ func (h *Handlers) Discover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tag := h.discoveryTag(ctx, u.ID)
-	drafts, err := h.discoverer.Discover(ctx, tag)
+	flat := h.discoveryFlat(ctx, u.ID)
+	drafts, err := h.discoverer.Discover(ctx, tag, flat)
 	if err != nil {
-		h.render(w, "discover.html", map[string]any{"User": u, "Error": err.Error(), "Tag": tag})
+		h.render(w, "discover.html", map[string]any{"User": u, "Error": err.Error(), "Tag": tag, "Flat": flat})
 		return
 	}
 
-	hide := map[string]bool{}
+	imported := map[string]bool{}
 	if items, err := h.catalog.ImportedOpenHABItems(ctx, u.ID); err == nil {
 		for _, it := range items {
-			hide[it] = true
+			imported[it] = true
 		}
 	}
+	ignored := map[string]bool{}
 	if h.ignore != nil {
 		if items, err := h.ignore.List(ctx, u.ID); err == nil {
 			for _, it := range items {
-				hide[it] = true
+				ignored[it] = true
 			}
 		}
 	}
@@ -83,7 +110,7 @@ func (h *Handlers) Discover(w http.ResponseWriter, r *http.Request) {
 	views := make([]draftView, 0, len(drafts))
 	for _, d := range drafts {
 		src := sourceItem(d)
-		if src == "" || hide[src] {
+		if src == "" || ignored[src] || draftImported(d, imported) {
 			continue
 		}
 		v := draftView{Item: src, Name: d.Name, Type: d.Type, Room: d.Room}
@@ -95,7 +122,9 @@ func (h *Handlers) Discover(w http.ResponseWriter, r *http.Request) {
 		}
 		views = append(views, v)
 	}
-	h.render(w, "discover.html", map[string]any{"User": u, "Drafts": views, "Tag": tag})
+	h.render(w, "discover.html", map[string]any{
+		"User": u, "Drafts": views, "Tag": tag, "Flat": flat, "AddError": r.URL.Query().Get("err"),
+	})
 }
 
 // AddDiscovered saves a chosen draft as a new device, placing it into its
@@ -110,7 +139,7 @@ func (h *Handlers) AddDiscovered(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	item := r.PostFormValue("item")
 
-	drafts, err := h.discoverer.Discover(ctx, h.discoveryTag(ctx, u.ID))
+	drafts, err := h.discoverer.Discover(ctx, h.discoveryTag(ctx, u.ID), h.discoveryFlat(ctx, u.ID))
 	if err != nil {
 		http.Redirect(w, r, "/app/discover?err=1", http.StatusFound)
 		return
@@ -118,6 +147,13 @@ func (h *Handlers) AddDiscovered(w http.ResponseWriter, r *http.Request) {
 	d, ok := draftByItem(drafts, item)
 	if !ok {
 		http.Redirect(w, r, "/app/discover", http.StatusFound)
+		return
+	}
+	// Alice caps names at 25 chars; a long openHAB label can't be imported as-is.
+	// Reject with a clear error rather than silently truncating — the user can
+	// shorten it via "Настроить".
+	if utf8.RuneCountInString(d.Name) > maxDeviceNameLen {
+		http.Redirect(w, r, "/app/discover?err=name", http.StatusFound)
 		return
 	}
 	d.ID = uuid.NewString()
@@ -164,6 +200,28 @@ func (h *Handlers) SetDiscoveryTag(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/app/discover", http.StatusFound)
 }
 
+// IgnoredList shows the user's ignored openHAB items (GET /app/discover/ignored).
+func (h *Handlers) IgnoredList(w http.ResponseWriter, r *http.Request) {
+	u := auth.UserFrom(r.Context())
+	var items []string
+	if h.ignore != nil {
+		items, _ = h.ignore.List(r.Context(), u.ID)
+	}
+	h.render(w, "ignored.html", map[string]any{"User": u, "Items": items})
+}
+
+// Unignore restores a single ignored item to discovery (POST /app/discover/unignore).
+func (h *Handlers) Unignore(w http.ResponseWriter, r *http.Request) {
+	u := auth.UserFrom(r.Context())
+	if h.ignore != nil {
+		_ = r.ParseForm()
+		if item := r.PostFormValue("item"); item != "" {
+			_ = h.ignore.Remove(r.Context(), u.ID, item)
+		}
+	}
+	http.Redirect(w, r, "/app/discover/ignored", http.StatusFound)
+}
+
 // ClearIgnore empties the user's ignore list (POST /app/discover/clear-ignore).
 func (h *Handlers) ClearIgnore(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFrom(r.Context())
@@ -182,11 +240,30 @@ func draftByItem(drafts []config.Device, item string) (config.Device, bool) {
 	return config.Device{}, false
 }
 
+// sourceItem is a draft's stable openHAB identity: the Equipment group item for
+// a composite device, otherwise the single item it binds to.
 func sourceItem(d config.Device) string {
+	for _, b := range d.OpenHAB {
+		if b.Kind == "equipment" {
+			return b.Item
+		}
+	}
 	if len(d.OpenHAB) > 0 {
 		return d.OpenHAB[0].Item
 	}
 	return ""
+}
+
+// draftImported reports whether any of a draft's member items is already bound
+// to one of the user's devices (so a composite whose Points were imported — or
+// later edited — is still hidden regardless of its identity marker).
+func draftImported(d config.Device, imported map[string]bool) bool {
+	for _, b := range d.OpenHAB {
+		if b.Kind != "equipment" && b.Item != "" && imported[b.Item] {
+			return true
+		}
+	}
+	return false
 }
 
 // actShort turns "devices.capabilities.on_off" into "on_off".

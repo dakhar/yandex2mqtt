@@ -1,0 +1,48 @@
+{{define "content"}}
+<div class="topbar">
+  <span class="brand">yandex2mqtt · игнорируемые устройства</span>
+  <span>
+    <a href="/app/discover">← к импорту</a>
+    <a href="/app/settings">настройки</a>
+    <a href="/logout">выйти</a>
+  </span>
+</div>
+
+<div class="wrap">
+  <p class="muted">Эти openHAB-items скрыты из дискаверинга. «Вернуть» — снова показывать при импорте.</p>
+
+  {{if not .Items}}
+    <p class="muted">Список игнора пуст.</p>
+  {{else}}
+    <div class="ign-actions">
+      <form method="post" action="/app/discover/clear-ignore"
+            onsubmit="return confirm('Вернуть в дискаверинг все {{len .Items}} устройств?')">
+        <button type="submit" class="ghost">Вернуть все ({{len .Items}})</button>
+      </form>
+    </div>
+    <table class="users">
+      <thead><tr><th>openHAB item</th><th></th></tr></thead>
+      <tbody>
+      {{range .Items}}
+        <tr>
+          <td><code>{{.}}</code></td>
+          <td class="acts">
+            <form method="post" action="/app/discover/unignore"><input type="hidden" name="item" value="{{.}}"><button type="submit" class="btn-restore">Вернуть</button></form>
+          </td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  {{end}}
+</div>
+
+<style>
+  .wrap { padding: 20px; }
+  .wrap code { background:#eef0f3; padding:1px 5px; border-radius:4px; font-size:13px; }
+  .ign-actions { margin-bottom:12px; }
+  .ign-actions form { margin:0; }
+  .ghost { background:#eef0f3; color:#555; border:0; border-radius:8px; padding:7px 12px; cursor:pointer; font-weight:600; }
+  .acts form { margin:0; }
+  .btn-restore { background:#2f9e44; color:#fff; border:0; border-radius:8px; padding:6px 12px; cursor:pointer; font-weight:600; font-size:13px; }
+</style>
+{{end}}

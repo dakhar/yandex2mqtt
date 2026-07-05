@@ -1,7 +1,7 @@
 {{define "content"}}
 <div class="topbar">
   <span class="brand">yandex2mqtt · {{if .EditID}}редактирование устройства{{else}}новое устройство{{end}}</span>
-  <span><a href="/app">← к доске</a> <a href="/logout">выйти</a></span>
+  <span><a href="#" id="langtog" onclick="toggleLang();return false" title="Язык интерфейса / UI language"></a> <a href="/app">← к доске</a> <a href="/logout">выйти</a></span>
 </div>
 
 {{if .Device}}<div id="device-data" style="display:none">{{.Device}}</div>{{end}}
@@ -10,8 +10,13 @@
   <div id="errors" class="err" style="display:none"></div>
 
   <section class="meta">
-    <label>Название</label>
-    <input id="name" type="text" placeholder="Например, Свет на кухне">
+    <label>Название <span class="hint">(до 25 символов — ограничение Алисы)</span></label>
+    <input id="name" type="text" maxlength="25" placeholder="Например, Свет на кухне">
+    <label>Транспорт</label>
+    <select id="transport" onchange="onTransport()">
+      <option value="mqtt">MQTT</option>
+      <option value="openhab">openHAB</option>
+    </select>
     <label>Тип устройства</label>
     <select id="type"></select>
     <label>Комната</label>
@@ -35,6 +40,17 @@
     <button type="button" class="add" onclick="addRow('prop')">+ свойство</button>
   </section>
 
+  <section>
+    <h2>Статус → ошибка <span class="hint">(error_code, необязательно)</span></h2>
+    <div class="hint">Привязка item/топика статуса к коду ошибки Яндекса (застрял, контейнер полон, низкий заряд…). Приходящее значение, не попавшее в таблицу, означает «нет ошибки».</div>
+    <div class="oh-field"><label>openHAB item статуса</label><input id="err-item" type="text" placeholder="VacuumCleaner_Status"></div>
+    <div class="mqtt-field"><label>MQTT state-топик статуса</label><input id="err-state" type="text" placeholder="device/status"></div>
+    <div class="mqtt-field"><label>JSON-путь <span class="hint">(необязательно)</span></label><input id="err-path" type="text" placeholder="напр. error"></div>
+    <label>Соответствие: приходящее значение → код Яндекса</label>
+    <div id="errmap"></div>
+    <button type="button" class="add" onclick="addErrRow()">+ строка</button>
+  </section>
+
   <div class="actions">
     <button type="button" class="primary" onclick="save()">{{if .EditID}}Сохранить{{else}}Создать устройство{{end}}</button>
   </div>
@@ -53,14 +69,30 @@
   .add { background:#eef0f3; border:1px dashed #b3b8bf; border-radius:8px; padding:8px 14px; cursor:pointer; }
   .primary { background:#ffcc00; border:0; border-radius:8px; padding:11px 20px; font-weight:600; cursor:pointer; font-size:15px; }
   .actions { margin-bottom:40px; }
-  .hint { font-size:11px; color:#8a8f98; }
+  .hint { font-size:11px; color:#8a8f98; font-weight:normal; }
+  .hint code { background:#f1f3f5; color:#495057; padding:1px 5px; border-radius:4px; font-family:ui-monospace, monospace; }
   .modes { display:flex; flex-wrap:wrap; gap:6px; max-height:120px; overflow:auto; }
-  .modes label { display:flex; align-items:center; gap:4px; font-size:12px; margin:0; }
+  .modes label { display:flex; align-items:center; gap:4px; font-size:12px; margin:0; color:#8a8f98; }
+  .modes label.rec { color:#1a1a1a; font-weight:600; }
   .modes input { width:auto; }
-  .map { margin-top:8px; border-top:1px dashed #e6e8eb; padding-top:8px; }
-  .map .pair { display:grid; grid-template-columns:1fr 1fr auto; gap:6px; margin-bottom:6px; }
-  .map .pair button { border:0; background:transparent; color:#c0392b; cursor:pointer; }
-  .map .addpair { font-size:12px; }
+  .vmap { border-top:1px dashed #e6e8eb; padding-top:6px; margin-top:4px; }
+  .vmap .vrow { display:grid; grid-template-columns:24px 1fr 1fr; gap:8px; align-items:center; margin-bottom:5px; }
+  .vmap .vhead { font-size:11px; color:#8a8f98; margin-bottom:4px; }
+  .vmap .vrow input[type=checkbox] { width:auto; }
+  .vmap .vlabel { font-size:13px; color:#8a8f98; }
+  .vmap .vrow.rec .vlabel { color:#1a1a1a; font-weight:600; }
+  .vmap .f-vin { padding:5px 8px; }
+  .vmore-btn { margin-top:6px; background:#eef0f3; border:1px dashed #b3b8bf; border-radius:8px;
+               padding:6px 12px; cursor:pointer; font-size:12px; color:#555; }
+  .flags { margin-top:10px; }
+  .flags > label { display:flex; align-items:center; gap:6px; font-size:13px; margin:2px 0; }
+  .flags > label input { width:auto; }
+  .flags .hint b { color:#495057; }
+  #errmap .erow { display:grid; grid-template-columns:1fr 16px 1fr auto; gap:8px; align-items:center; margin-bottom:6px; }
+  #errmap .arr { text-align:center; color:#8a8f98; }
+  #errmap .erow button { border:0; background:transparent; color:#c0392b; cursor:pointer; font-size:16px; }
+  body[data-transport="openhab"] .mqtt-field { display:none; }
+  body[data-transport="mqtt"] .oh-field { display:none; }
 </style>
 
 <script>
@@ -68,25 +100,86 @@ let SCHEMA = null;
 const capIndex = { cap: 0, prop: 0 };
 const EDIT_ID = "{{.EditID}}";
 
+// UI language (RU default). Labels come from SCHEMA.labels; values stay technical.
+const LANG = (localStorage.getItem('ya_lang') === 'en') ? 'en' : 'ru';
+function lbl(cat, val) {
+  const c = SCHEMA && SCHEMA.labels && SCHEMA.labels[cat];
+  const e = c && c[val];
+  return (e && e[LANG]) || val;
+}
+function instCat(actType) {
+  return { range: 'range_instances', mode: 'mode_instances', toggle: 'toggle_instances',
+           float: 'float_instances', event: 'event_instances', color_setting: 'color_instances' }[actType];
+}
+function toggleLang() {
+  localStorage.setItem('ya_lang', LANG === 'en' ? 'ru' : 'en');
+  location.reload();
+}
+document.getElementById('langtog').textContent = LANG === 'en' ? 'RU' : 'EN';
+
 const dd = document.getElementById('device-data');
 const DEVICE = dd ? JSON.parse(dd.textContent) : null;
 
 fetch('/app/schema').then(r => r.json()).then(s => {
   SCHEMA = s;
   const typeSel = document.getElementById('type');
-  s.device_types.forEach(t => typeSel.add(new Option(t, t)));
+  s.device_types.forEach(t => typeSel.add(new Option(lbl('device_types', t), t)));
   if (DEVICE) prefill(DEVICE);
+  onTransport();
 });
 
 function defsFor(kind) { return kind === 'cap' ? SCHEMA.capabilities : SCHEMA.properties; }
 
+function onTransport() {
+  document.body.dataset.transport = document.getElementById('transport').value;
+}
+
+function toggleMore(rowId, n) {
+  const box = document.getElementById(rowId + '-more');
+  const btn = document.getElementById(rowId + '-morebtn');
+  const open = box.style.display === 'none';
+  box.style.display = open ? 'block' : 'none';
+  btn.textContent = open ? 'Свернуть ▴' : ('Показать ещё ' + n + ' значений ▾');
+}
+
 function prefill(d) {
   document.getElementById('name').value = d.name || '';
   document.getElementById('type').value = d.type || '';
+  document.getElementById('transport').value = d.transport || 'mqtt';
   document.getElementById('room').value = d.room_id || '';
   document.getElementById('description').value = d.description || '';
   (d.capabilities || []).forEach(c => addRow('cap', c));
   (d.properties || []).forEach(p => addRow('prop', p));
+  if (d.error) {
+    document.getElementById('err-item').value = d.error.item || '';
+    document.getElementById('err-state').value = d.error.state || '';
+    document.getElementById('err-path').value = d.error.state_path || '';
+    (d.error.mapping || []).forEach(m => addErrRow(m.value, m.code));
+  }
+}
+
+function addErrRow(value, code) {
+  const box = document.getElementById('errmap');
+  const div = document.createElement('div');
+  div.className = 'erow';
+  const opts = (SCHEMA.error_codes || []).map(c => `<option value="${c}"${c === code ? ' selected' : ''}>${c}</option>`).join('');
+  div.innerHTML = `<input type="text" class="ev" placeholder="приходящее значение" value="${attr(fmt(value))}">
+                   <span class="arr">→</span>
+                   <select class="ec"><option value="">— код —</option>${opts}</select>
+                   <button type="button" onclick="this.parentNode.remove()">×</button>`;
+  box.appendChild(div);
+}
+
+function collectError() {
+  const item = document.getElementById('err-item').value.trim();
+  const state = document.getElementById('err-state').value.trim();
+  const path = document.getElementById('err-path').value.trim();
+  const mapping = [...document.querySelectorAll('#errmap .erow')].map(r => ({
+    value: r.querySelector('.ev').value.trim(),
+    code: r.querySelector('.ec').value
+  })).filter(p => p.value !== '' && p.code !== '');
+  if ((!item && !state) || mapping.length === 0) return null;
+  return { item, state, state_path: path, mapping };
 }
 
 function addRow(kind, data) {
@@ -96,7 +189,8 @@ function addRow(kind, data) {
   row.dataset.kind = kind;
   row.id = id;
   const cur = data ? data.type : defsFor(kind)[0].type;
-  const typeOpts = defsFor(kind).map(d => `<option value="${d.type}"${d.type === cur ? ' selected' : ''}>${d.type}</option>`).join('');
+  const tcat = kind === 'cap' ? 'capabilities' : 'properties';
+  const typeOpts = defsFor(kind).map(d => `<option value="${d.type}"${d.type === cur ? ' selected' : ''}>${lbl(tcat, d.type)}</option>`).join('');
   row.innerHTML = `
     <button class="rm" onclick="this.parentNode.remove()">×</button>
     <label>Тип</label>
@@ -115,63 +209,99 @@ function renderParams(rowId, data) {
   const actType = type.split('.')[2];
   const d = data || {};
   const dParams = d.params || {};
-  const wantInst = d.instance || dParams.instance || def.instances[0];
+  // On re-render (instance or type change) preserve the currently selected
+  // instance; on first render use the prefill data. Fall back to the first valid
+  // instance when the previous value isn't valid for this type.
+  const existing = row.querySelector('.f-instance');
+  const preferred = (existing ? existing.value : (d.instance || dParams.instance)) || def.instances[0];
+  const wantInst = def.instances.includes(preferred) ? preferred : def.instances[0];
 
-  const instanceSel = def.instances.map(i => `<option value="${i}"${i === wantInst ? ' selected' : ''}>${i}</option>`).join('');
+  const icat = instCat(actType);
+  const instanceSel = def.instances.map(i => `<option value="${i}"${i === wantInst ? ' selected' : ''}>${icat ? lbl(icat, i) : i}</option>`).join('');
   let html = `<label>Instance</label><select class="f-instance" onchange="renderParams('${rowId}')">${instanceSel}</select>`;
-  const inst = row.querySelector('.f-instance') ? row.querySelector('.f-instance').value : wantInst;
+  const inst = wantInst;
 
   if (def.units && def.units[inst]) {
     const cur = dParams.unit || '';
     html += `<label>Единица</label><select class="f-unit"><option value="">—</option>` +
-            def.units[inst].map(x => `<option value="${x}"${x === cur ? ' selected' : ''}>${x}</option>`).join('') + `</select>`;
+            def.units[inst].map(x => `<option value="${x}"${x === cur ? ' selected' : ''}>${lbl('units', x)}</option>`).join('') + `</select>`;
   }
   if (actType === 'range') {
     const rg = dParams.range || {};
     html += `<div class="grid"><div><label>min</label><input type="number" class="f-min" value="${valOr(rg.min, 0)}"></div>
              <div><label>max</label><input type="number" class="f-max" value="${valOr(rg.max, 100)}"></div>
              <div><label>precision</label><input type="number" class="f-prec" value="${valOr(rg.precision, 1)}"></div></div>`;
+    html += `<label class="hint"><input type="checkbox" class="f-invert"${d.invert ? ' checked' : ''}> Инвертировать проценты <span class="hint">(0% у устройства = 100% у Яндекса — для штор/Rollershutter)</span></label>`;
   }
-  if (actType === 'mode') {
-    const set = new Set((dParams.modes || []).map(m => m.value));
-    html += `<label>Режимы</label><div class="modes">` +
-            SCHEMA.mode_values.map(m => `<label><input type="checkbox" class="f-mode" value="${m}"${set.has(m) ? ' checked' : ''}>${m}</label>`).join('') + `</div>`;
+  // Unified value-mapping table for discrete act-types: the left column is the
+  // Yandex value (filled in automatically — the user needn't know the enum), the
+  // right column is the incoming device value. Empty right cell = no mapping.
+  let mapRows = null, mapSelectable = false;
+  if (actType === 'on_off' || actType === 'toggle') {
+    mapRows = [{ v: 'true', label: 'Включено' }, { v: 'false', label: 'Выключено' }];
+  } else if (actType === 'mode') {
+    mapSelectable = true;
+    const rec = (SCHEMA.mode_recommended && SCHEMA.mode_recommended[inst]) || [];
+    const recSet = new Set(rec);
+    const ordered = rec.concat(SCHEMA.mode_values.filter(m => !recSet.has(m)));
+    mapRows = ordered.map(m => ({ v: m, label: lbl('mode_values', m), rec: recSet.has(m) }));
+  } else if (actType === 'event' && def.events && def.events[inst]) {
+    mapSelectable = true;
+    mapRows = def.events[inst].map(m => ({ v: m, label: lbl('event_values', m) }));
   }
-  if (actType === 'event' && def.events && def.events[inst]) {
-    const set = new Set((dParams.events || []).map(m => m.value));
-    html += `<label>События</label><div class="modes">` +
-            def.events[inst].map(m => `<label><input type="checkbox" class="f-event" value="${m}"${set.has(m) ? ' checked' : ''}>${m}</label>`).join('') + `</div>`;
+  if (mapRows) {
+    const selSet = new Set((dParams[actType === 'event' ? 'events' : 'modes'] || []).map(x => String(x.value)));
+    const inMap = {};
+    (d.mapping || []).forEach(p => { inMap[String(p.yandex)] = p.mqtt; });
+    const hint = mapSelectable ? 'отметь нужные значения; справа впиши, чем это приходит от устройства'
+                               : 'справа впиши, чем это приходит от устройства (пусто = определяется автоматически)';
+    const rowHtml = r => {
+      const cb = mapSelectable
+        ? `<input type="checkbox" class="f-vsel" value="${r.v}"${selSet.has(String(r.v)) ? ' checked' : ''}>`
+        : `<span></span>`;
+      return `<div class="vrow${r.rec ? ' rec' : ''}">${cb}<span class="vlabel">${r.label}</span>
+              <input type="text" class="f-vin" data-val="${r.v}" value="${attr(fmt(inMap[String(r.v)]))}" placeholder="напр. ON · 1 · heat"></div>`;
+    };
+    // Collapse the long tail of unused mode values under a toggle; keep
+    // recommended / selected / already-mapped rows visible.
+    const cut = actType === 'mode';
+    const shown = [], hidden = [];
+    mapRows.forEach(r => {
+      const active = r.rec || selSet.has(String(r.v)) || (inMap[String(r.v)] !== undefined && inMap[String(r.v)] !== '');
+      (cut && !active ? hidden : shown).push(r);
+    });
+    html += `<label>Таблица соответствия <span class="hint">(${hint})</span></label>
+             <div class="vmap"><div class="vrow vhead"><span></span><span>Значение Яндекса</span><span>Приходит от устройства</span></div>` +
+      shown.map(rowHtml).join('');
+    if (hidden.length) {
+      html += `<div class="vmore" id="${rowId}-more" style="display:none">` + hidden.map(rowHtml).join('') + `</div>
+               <button type="button" class="vmore-btn" id="${rowId}-morebtn" onclick="toggleMore('${rowId}', ${hidden.length})">Показать ещё ${hidden.length} значений ▾</button>`;
+    }
+    html += `</div>`;
   }
   if (actType === 'color_setting' && inst === 'temperature_k') {
     const tk = dParams.temperature_k || {};
     html += `<div class="grid"><div><label>K min</label><input type="number" class="f-min" value="${valOr(tk.min, 2700)}"></div>
              <div><label>K max</label><input type="number" class="f-max" value="${valOr(tk.max, 6500)}"></div></div>`;
   }
-  html += `<label>MQTT state-топик</label><input type="text" class="f-state" value="${attr(d.state)}" placeholder="yandex/Device/state">`;
+  html += `<div class="oh-field"><label>openHAB item</label><input type="text" class="f-item" value="${attr(d.item)}" placeholder="Light_Kitchen"></div>`;
+  html += `<div class="mqtt-field"><label>MQTT state-топик</label><input type="text" class="f-state" value="${attr(d.state)}" placeholder="yandex/Device/state"></div>`;
+  html += `<div class="mqtt-field"><label>JSON-путь в state <span class="hint">(необязательно)</span>
+             <div class="hint">Заполняй, только если в одном топике приходит JSON-объект. Путь = имя поля.<br>
+             Например, топик шлёт <code>{"state":"ON","brightness":150}</code> → путь <code>brightness</code> возьмёт <code>150</code>.<br>
+             Вложенное поле — через точку: <code>{"ENERGY":{"Power":12}}</code> → <code>ENERGY.Power</code>. Пусто = берётся весь payload.</div></label>
+           <input type="text" class="f-path" value="${attr(d.state_path)}" placeholder="напр. brightness или ENERGY.Power"></div>`;
   if (kind === 'cap') {
-    html += `<label>MQTT set-топик</label><input type="text" class="f-set" value="${attr(d.set)}" placeholder="yandex/Device/set">`;
+    html += `<div class="mqtt-field"><label>MQTT set-топик</label><input type="text" class="f-set" value="${attr(d.set)}" placeholder="yandex/Device/set"></div>`;
   }
-  html += `<label class="hint"><input type="checkbox" class="f-retr"${d.retrievable !== false ? ' checked' : ''}> retrievable · <input type="checkbox" class="f-rep"${d.reportable !== false ? ' checked' : ''}> reportable</label>`;
+  html += `<div class="flags">
+             <label><input type="checkbox" class="f-retr"${d.retrievable !== false ? ' checked' : ''}> Состояние можно запросить <span class="hint">(retrievable)</span></label>
+             <label><input type="checkbox" class="f-rep"${d.reportable !== false ? ' checked' : ''}> Сообщать об изменениях <span class="hint">(reportable)</span></label>
+             <div class="hint"><b>retrievable</b> — Алиса может узнать текущее значение («какая температура?»). Выключи, если состояние прочитать нельзя (команда без обратной связи).<br>
+             <b>reportable</b> — устройство само шлёт изменения в Алису (мгновенные обновления без опроса).</div>
+           </div>`;
 
-  if (kind === 'cap') {
-    html += `<div class="map"><div class="hint">Маппинг значений Yandex↔MQTT (необязательно; true/false и числа определяются автоматически)</div>
-             <div class="pairs"></div>
-             <button type="button" class="add addpair" onclick="addPair('${rowId}')">+ пара</button></div>`;
-  }
   p.innerHTML = html;
-
-  (d.mapping || []).forEach(m => addPair(rowId, m.yandex, m.mqtt));
-}
-
-function addPair(rowId, yandex, mqtt) {
-  const box = document.getElementById(rowId).querySelector('.pairs');
-  if (!box) return;
-  const div = document.createElement('div');
-  div.className = 'pair';
-  div.innerHTML = `<input type="text" class="p-y" placeholder="Yandex" value="${attr(fmt(yandex))}">
-                   <input type="text" class="p-m" placeholder="MQTT" value="${attr(fmt(mqtt))}">
-                   <button type="button" onclick="this.parentNode.remove()">×</button>`;
-  box.appendChild(div);
 }
 
 function collect(kind) {
@@ -185,24 +315,39 @@ function collect(kind) {
     const unit = row.querySelector('.f-unit');
     if (unit && unit.value) params.unit = unit.value;
     if (actType === 'range') params.range = { min: num(row, '.f-min'), max: num(row, '.f-max'), precision: num(row, '.f-prec') };
-    if (actType === 'mode') params.modes = [...row.querySelectorAll('.f-mode:checked')].map(c => ({ value: c.value }));
-    if (actType === 'event') params.events = [...row.querySelectorAll('.f-event:checked')].map(c => ({ value: c.value }));
+    if (actType === 'mode') params.modes = [...row.querySelectorAll('.f-vsel:checked')].map(c => ({ value: c.value }));
+    if (actType === 'event') params.events = [...row.querySelectorAll('.f-vsel:checked')].map(c => ({ value: c.value }));
     if (actType === 'color_setting') {
       if (inst === 'temperature_k') params.temperature_k = { min: num(row, '.f-min'), max: num(row, '.f-max') };
       else if (inst === 'hsv' || inst === 'rgb') params.color_model = inst;
     }
     const setEl = row.querySelector('.f-set');
+    const itemEl = row.querySelector('.f-item');
+    const pathEl = row.querySelector('.f-path');
     const item = {
       type, instance: inst,
       retrievable: row.querySelector('.f-retr').checked,
       reportable: row.querySelector('.f-rep').checked,
       params,
       set: setEl ? setEl.value.trim() : '',
-      state: row.querySelector('.f-state').value.trim()
+      state: row.querySelector('.f-state').value.trim(),
+      state_path: pathEl ? pathEl.value.trim() : '',
+      item: itemEl ? itemEl.value.trim() : '',
+      invert: !!(row.querySelector('.f-invert') && row.querySelector('.f-invert').checked)
     };
-    const pairs = [...row.querySelectorAll('.pair')].map(pr => ({
-      yandex: parseVal(pr.querySelector('.p-y').value), mqtt: parseVal(pr.querySelector('.p-m').value)
-    })).filter(p => p.yandex !== '' || p.mqtt !== '');
+    // Value mapping from the "Таблица соответствия": one pair per row with an
+    // incoming value (for selectable types — mode/event — only checked rows).
+    const selectable = actType === 'mode' || actType === 'event';
+    const pairs = [];
+    row.querySelectorAll('.f-vin').forEach(el => {
+      const inv = el.value.trim();
+      if (inv === '') return;
+      if (selectable) {
+        const cb = row.querySelector('.f-vsel[value="' + el.dataset.val + '"]');
+        if (!cb || !cb.checked) return;
+      }
+      pairs.push({ yandex: parseVal(el.dataset.val), mqtt: parseVal(inv) });
+    });
     if (pairs.length) item.mapping = pairs;
     out.push(item);
   });
@@ -225,11 +370,14 @@ function save() {
   const payload = {
     name: document.getElementById('name').value.trim(),
     type: document.getElementById('type').value,
+    transport: document.getElementById('transport').value,
     room_id: document.getElementById('room').value,
     description: document.getElementById('description').value.trim(),
     capabilities: collect('cap'),
     properties: collect('prop')
   };
+  const err = collectError();
+  if (err) payload.error = err;
   const url = EDIT_ID ? '/app/devices/' + encodeURIComponent(EDIT_ID) : '/app/devices';
   fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
     .then(async r => {

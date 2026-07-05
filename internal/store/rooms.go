@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Room is a grouping of devices, owned by a user.
@@ -18,6 +19,12 @@ type Room struct {
 
 // ErrRoomExists is returned when a room name is already taken for the user.
 var ErrRoomExists = errors.New("room already exists")
+
+// ErrRoomNameTooLong is returned when a room name exceeds Alice's 20-char limit.
+var ErrRoomNameTooLong = errors.New("room name too long")
+
+// MaxRoomNameLen is Alice's room-name character limit.
+const MaxRoomNameLen = 20
 
 // RoomRepo manages rooms, always scoped to the owning user.
 type RoomRepo struct {
@@ -51,6 +58,9 @@ func (r *RoomRepo) Create(ctx context.Context, userID, name string) (*Room, erro
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, errors.New("empty room name")
+	}
+	if utf8.RuneCountInString(name) > MaxRoomNameLen {
+		return nil, ErrRoomNameTooLong
 	}
 	var pos int
 	if err := r.db.QueryRowContext(ctx,
@@ -111,6 +121,13 @@ func (r *RoomRepo) Rename(ctx context.Context, userID, id, name string) error {
 func (r *RoomRepo) Delete(ctx context.Context, userID, id string) error {
 	_, err := r.db.ExecContext(ctx,
 		`DELETE FROM rooms WHERE id = ? AND user_id = ?`, id, userID)
+	return err
+}
+
+// DeleteAll removes all of a user's rooms (for reset/import). Devices are
+// deleted separately; any that remain become unassigned.
+func (r *RoomRepo) DeleteAll(ctx context.Context, userID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM rooms WHERE user_id = ?`, userID)
 	return err
 }
 

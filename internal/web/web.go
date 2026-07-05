@@ -9,12 +9,18 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/dakhar/yandex2mqtt/internal/auth"
+	"github.com/dakhar/yandex2mqtt/internal/config"
 	"github.com/dakhar/yandex2mqtt/internal/store"
 )
+
+// roomTooLongMsg is shown when a room name exceeds Alice's 20-character limit.
+var roomTooLongMsg = url.QueryEscape("Название комнаты — не длиннее 20 символов")
 
 //go:embed templates/*.html
 var templatesFS embed.FS
@@ -29,13 +35,33 @@ type Reloader interface {
 
 // Handlers serves the board and room/device mutations.
 type Handlers struct {
-	rooms      *store.RoomRepo
-	catalog    *store.CatalogRepo
-	reloader   Reloader
-	discoverer Discoverer // nil when openHAB isn't configured
-	settings   *store.SettingsRepo
-	ignore     *store.IgnoreRepo
-	log        *slog.Logger
+	rooms       *store.RoomRepo
+	catalog     *store.CatalogRepo
+	reloader    Reloader
+	discoverer  Discoverer // nil when openHAB isn't configured
+	settings    *store.SettingsRepo
+	ignore      *store.IgnoreRepo
+	onDiscovery func(userID string) // notify Yandex the device list changed (nil = off)
+
+	// Admin-editable server (MQTT/openHAB) connection config.
+	configRepo   *store.ConfigRepo
+	effectiveCfg func() (config.MQTT, config.OpenHAB)
+	applyServer  func() error
+
+	log *slog.Logger
+}
+
+// SetDiscoveryNotifier registers a hook fired after a user's catalog changes, so
+// Yandex re-syncs the device list (Notification API /callback/discovery).
+func (h *Handlers) SetDiscoveryNotifier(f func(userID string)) { h.onDiscovery = f }
+
+// SetServerConfig wires the admin server-config editor: the repo to persist to,
+// an accessor for the effective (env+DB) config, and an apply hook that
+// reconnects MQTT/openHAB.
+func (h *Handlers) SetServerConfig(cr *store.ConfigRepo, effective func() (config.MQTT, config.OpenHAB), apply func() error) {
+	h.configRepo = cr
+	h.effectiveCfg = effective
+	h.applyServer = apply
 }
 
 // New builds the web handlers.
@@ -89,7 +115,12 @@ func (h *Handlers) Board(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) CreateRoom(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFrom(r.Context())
 	_ = r.ParseForm()
-	if _, err := h.rooms.Create(r.Context(), u.ID, r.PostFormValue("name")); err != nil {
+	name := r.PostFormValue("name")
+	if utf8.RuneCountInString(name) > maxRoomNameLen {
+		http.Redirect(w, r, "/app?err="+roomTooLongMsg, http.StatusFound)
+		return
+	}
+	if _, err := h.rooms.Create(r.Context(), u.ID, name); err != nil {
 		h.redirectErr(w, r, err)
 		return
 	}
@@ -100,7 +131,12 @@ func (h *Handlers) CreateRoom(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) RenameRoom(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFrom(r.Context())
 	_ = r.ParseForm()
-	if err := h.rooms.Rename(r.Context(), u.ID, chi.URLParam(r, "id"), r.PostFormValue("name")); err != nil {
+	name := r.PostFormValue("name")
+	if utf8.RuneCountInString(name) > maxRoomNameLen {
+		http.Redirect(w, r, "/app?err="+roomTooLongMsg, http.StatusFound)
+		return
+	}
+	if err := h.rooms.Rename(r.Context(), u.ID, chi.URLParam(r, "id"), name); err != nil {
 		h.redirectErr(w, r, err)
 		return
 	}
@@ -164,6 +200,14 @@ func (h *Handlers) MoveDevice(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) reload(ctx context.Context) {
 	if err := h.reloader.Reload(ctx); err != nil {
 		h.log.Error("registry reload", "err", err)
+		return
+	}
+	// The catalog changed: tell Yandex to re-discover this user's devices so new
+	// or edited devices appear in Alice without a manual skill refresh.
+	if h.onDiscovery != nil {
+		if u := auth.UserFrom(ctx); u != nil {
+			h.onDiscovery(u.ID)
+		}
 	}
 }
 
@@ -172,8 +216,10 @@ func (h *Handlers) redirectErr(w http.ResponseWriter, r *http.Request, err error
 	switch err {
 	case store.ErrRoomExists:
 		msg = "Комната с таким названием уже есть"
+	case store.ErrRoomNameTooLong:
+		msg = "Название комнаты — не длиннее 20 символов"
 	}
-	http.Redirect(w, r, "/app?err="+msg, http.StatusFound)
+	http.Redirect(w, r, "/app?err="+url.QueryEscape(msg), http.StatusFound)
 }
 
 func (h *Handlers) render(w http.ResponseWriter, page string, data any) {

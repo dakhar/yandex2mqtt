@@ -74,6 +74,38 @@ var modeValues = newSet(
 	"steam", "stewing", "vacuum", "yogurt",
 )
 
+// modeRecommended lists the mode values Yandex recommends for each mode instance
+// (concepts/mode-instance), in documented order. The builder surfaces these
+// first for the selected instance.
+var modeRecommended = map[string][]string{
+	"cleanup_mode":     {"auto", "eco", "express", "normal", "quiet", "wet_cleaning", "dry_cleaning", "mixed_cleaning"},
+	"coffee_mode":      {"americano", "cappuccino", "double_espresso", "espresso", "latte"},
+	"dishwashing":      {"auto", "eco", "express", "glass", "intensive", "pre_rinse", "quiet"},
+	"fan_speed":        {"auto", "high", "low", "medium", "turbo"},
+	"heat":             {"auto", "max", "min", "normal", "turbo"},
+	"input_source":     {"one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"},
+	"program":          {"auto", "express", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"},
+	"swing":            {"auto", "horizontal", "stationary", "vertical"},
+	"tea_mode":         {"black_tea", "flower_tea", "green_tea", "herbal_tea", "oolong_tea", "puerh_tea", "red_tea", "white_tea"},
+	"thermostat":       {"auto", "cool", "dry", "fan_only", "heat", "preheat"},
+	"ventilation_mode": {"auto", "supply_air", "extraction_air"},
+	"work_speed":       {"auto", "fast", "max", "medium", "min", "slow", "turbo"},
+}
+
+// RecommendedModes returns Yandex's recommended mode values for a mode instance
+// (nil if unknown).
+func RecommendedModes(instance string) []string { return modeRecommended[instance] }
+
+// errorCodes are the device-state error_code values (concepts/response-codes)
+// usable for status reporting (action-only codes are excluded).
+var errorCodes = []string{
+	"DEVICE_UNREACHABLE", "DEVICE_BUSY", "DEVICE_OFF", "DEVICE_STUCK",
+	"LOW_CHARGE_LEVEL", "CONTAINER_FULL", "CONTAINER_EMPTY", "NOT_ENOUGH_WATER",
+	"NOT_ENOUGH_DETERGENT", "DRIP_TRAY_FULL", "DOOR_OPEN", "LID_OPEN",
+	"FIRMWARE_OUT_OF_DATE", "REMOTE_CONTROL_DISABLED", "HUMAN_INVOLVEMENT_NEEDED",
+	"INTERNAL_ERROR",
+}
+
 var toggleInstances = newSet(
 	"backlight", "controls_locked", "ionization", "keep_warm", "mute", "oscillation", "pause",
 )

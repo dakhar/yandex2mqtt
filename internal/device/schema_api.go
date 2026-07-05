@@ -10,6 +10,13 @@ type Schema struct {
 	Properties   []PropertySchema   `json:"properties"`
 	ColorScenes  []string           `json:"color_scenes"`
 	ModeValues   []string           `json:"mode_values"`
+	// ModeRecommended maps a mode instance to Yandex's recommended values, shown
+	// first in the builder when that instance is selected.
+	ModeRecommended map[string][]string `json:"mode_recommended"`
+	// Labels holds RU/EN display names for every schema term.
+	Labels Labels `json:"labels"`
+	// ErrorCodes are the Yandex device-level error_code values for status binding.
+	ErrorCodes []string `json:"error_codes"`
 }
 
 // CapabilitySchema describes a capability type and its allowed instances/units.
@@ -30,9 +37,12 @@ type PropertySchema struct {
 // BuildSchema returns the reference schema for the builder.
 func BuildSchema() Schema {
 	return Schema{
-		DeviceTypes: sortedSet(deviceTypes),
-		ColorScenes: sortedSet(colorScenes),
-		ModeValues:  sortedSet(modeValues),
+		DeviceTypes:     sortedSet(deviceTypes),
+		ColorScenes:     sortedSet(colorScenes),
+		ModeValues:      sortedSet(modeValues),
+		ModeRecommended: modeRecommended,
+		Labels:          BuildLabels(),
+		ErrorCodes:      errorCodes,
 		Capabilities: []CapabilitySchema{
 			{Type: "devices.capabilities.on_off", Instances: []string{"on"}},
 			{Type: "devices.capabilities.range", Instances: sortedKeys(rangeUnits), Units: setMapToSlices(rangeUnits)},

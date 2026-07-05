@@ -1,0 +1,111 @@
+{{define "content"}}
+<div class="topbar">
+  <span class="brand">yandex2mqtt · настройки</span>
+  <span>
+    <a href="#" id="langtog" onclick="toggleLang();return false" title="Язык / Language"></a>
+    <a href="/app">← к доске</a>
+    <a href="/logout">выйти</a>
+  </span>
+</div>
+
+<div class="wrap sett">
+  {{if .Notice}}<div class="ok">{{if eq .Notice "import"}}Конфигурация импортирована.{{else if eq .Notice "reset"}}Все настройки сброшены.{{else if eq .Notice "tag"}}Сохранено.{{else if eq .Notice "servers"}}Серверы сохранены, переподключение выполнено.{{else}}Готово.{{end}}</div>{{end}}
+  {{if .Error}}<div class="err">{{if eq .Error "file"}}Не выбран файл.{{else if eq .Error "parse"}}Не удалось разобрать файл резервной копии.{{else if eq .Error "apply"}}Настройки сохранены, но переподключение не удалось — проверьте адрес/креды.{{else}}Ошибка.{{end}}</div>{{end}}
+
+  {{if .ShowServers}}
+  <section>
+    <h2>Серверы (админ)</h2>
+    <div class="hint">Подключения к MQTT-брокеру и openHAB. Изменения применяются сразу — сервис переподключается без рестарта. Пусто = берётся из окружения (.env).</div>
+    <form method="post" action="/app/settings/servers">
+      <h3>MQTT</h3>
+      <div class="grid2">
+        <div><label class="fl">Хост</label><input type="text" name="mqtt_host" value="{{.MQTTHost}}" placeholder="10.12.1.103"></div>
+        <div><label class="fl">Порт</label><input type="text" name="mqtt_port" value="{{.MQTTPort}}" placeholder="1883"></div>
+        <div><label class="fl">Пользователь</label><input type="text" name="mqtt_user" value="{{.MQTTUser}}" placeholder="(необязательно)"></div>
+        <div><label class="fl">Пароль</label><input type="password" name="mqtt_password" placeholder="{{if .MQTTHasPassword}}•••••• (задан){{else}}(не задан){{end}}" autocomplete="new-password"></div>
+      </div>
+      <h3>openHAB</h3>
+      <div class="grid2">
+        <div><label class="fl">URL</label><input type="text" name="openhab_url" value="{{.OHURL}}" placeholder="http://10.12.1.103:8080"></div>
+        <div><label class="fl">API-токен</label><input type="password" name="openhab_token" placeholder="{{if .OHHasToken}}•••••• (задан){{else}}(не задан){{end}}" autocomplete="new-password"></div>
+      </div>
+      <div class="hint">Пароль/токен оставь пустыми, чтобы не менять. Секреты хранятся в БД.</div>
+      <button type="submit" class="btn btn-imp" style="margin-top:10px"
+              onsubmit="return true">Сохранить и переподключить</button>
+    </form>
+  </section>
+  {{end}}
+
+  <section>
+    <h2>Параметры</h2>
+
+    <label class="fl">Язык интерфейса</label>
+    <select id="lang" onchange="setLang(this.value)">
+      <option value="ru">Русский</option>
+      <option value="en">English</option>
+    </select>
+    <div class="hint">Хранится в браузере, применяется на всех страницах.</div>
+
+    {{if .OpenHAB}}
+    <form method="post" action="/app/settings/tag" class="row">
+      <div style="flex:1">
+        <label class="fl">Тег-фильтр дискаверинга openHAB</label>
+        <input type="text" name="tag" value="{{.Tag}}" placeholder="пусто = все устройства">
+        <div class="hint">Показывать при импорте только items с этим тегом. Пусто — показывать все.</div>
+      </div>
+      <button type="submit">Сохранить</button>
+    </form>
+    <div class="hint">Игнорируемых при импорте устройств: <b>{{.IgnoreCount}}</b> — управлять на <a href="/app/discover/ignored">странице игнора</a>.</div>
+    {{end}}
+  </section>
+
+  <section>
+    <h2>Резервная копия</h2>
+    <div class="hint">Текущая конфигурация: <b>{{.DeviceCount}}</b> устройств, <b>{{.RoomCount}}</b> комнат.</div>
+
+    <div class="backup">
+      <a class="btn btn-exp" href="/app/settings/export">⭳ Экспорт конфигурации</a>
+
+      <form method="post" action="/app/settings/import" enctype="multipart/form-data" class="imp"
+            onsubmit="return confirm('Импорт ЗАМЕНИТ текущую конфигурацию (устройства, комнаты, настройки). Продолжить?')">
+        <input type="file" name="file" accept="application/json" required>
+        <button type="submit" class="btn btn-imp">⭱ Импорт</button>
+      </form>
+
+      <form method="post" action="/app/settings/reset"
+            onsubmit="return confirm('Сбросить ВСЁ: устройства, комнаты, настройки и список игнора? Это необратимо.')">
+        <button type="submit" class="btn btn-reset">Сбросить все настройки</button>
+      </form>
+    </div>
+    <div class="hint">Экспорт сохраняет комнаты, устройства (со всеми умениями, привязками и маппингами), тег и список игнора в JSON-файл. Импорт восстанавливает их, заменяя текущие.</div>
+  </section>
+</div>
+
+<style>
+  .sett { max-width: 720px; }
+  .sett section { background:#fff; border-radius:12px; padding:16px 18px; margin-bottom:16px; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .sett h2 { margin:0 0 12px; font-size:16px; }
+  .sett .fl { display:block; font-size:13px; color:#555; margin:10px 0 4px; }
+  .sett input[type=text], .sett input[type=password], .sett select { padding:8px 10px; border:1px solid #d0d3d9; border-radius:8px; font-size:14px; }
+  .sett input[type=text], .sett input[type=password] { width:100%; box-sizing:border-box; }
+  .sett h3 { font-size:14px; margin:14px 0 4px; color:#495057; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .sett .hint { font-size:12px; color:#8a8f98; margin-top:6px; }
+  .sett .row { display:flex; gap:10px; align-items:flex-end; margin-top:10px; }
+  .sett .row button { padding:8px 14px; border:0; border-radius:8px; background:#ffcc00; font-weight:600; cursor:pointer; }
+  .ok { background:#ebfbee; color:#2b8a3e; padding:8px 12px; border-radius:8px; margin-bottom:12px; font-size:14px; }
+  .backup { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:6px; }
+  .backup .imp { display:flex; gap:8px; align-items:center; margin:0; }
+  .btn { border:0; border-radius:8px; padding:9px 14px; cursor:pointer; font-weight:600; font-size:14px; text-decoration:none; display:inline-block; }
+  .btn-exp { background:#2f9e44; color:#fff; }
+  .btn-imp { background:#3b5bdb; color:#fff; }
+  .btn-reset { background:#e03131; color:#fff; }
+</style>
+<script>
+  const LANG = (localStorage.getItem('ya_lang') === 'en') ? 'en' : 'ru';
+  document.getElementById('langtog').textContent = LANG === 'en' ? 'RU' : 'EN';
+  document.getElementById('lang').value = LANG;
+  function toggleLang() { localStorage.setItem('ya_lang', LANG === 'en' ? 'ru' : 'en'); location.reload(); }
+  function setLang(v) { localStorage.setItem('ya_lang', v); location.reload(); }
+</script>
+{{end}}

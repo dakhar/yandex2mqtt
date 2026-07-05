@@ -53,6 +53,17 @@ CREATE TABLE IF NOT EXISTS openhab_ignore (
     item    TEXT NOT NULL,
     PRIMARY KEY (user_id, item)
 );
+CREATE TABLE IF NOT EXISTS app_config (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS device_errors (
+    device_id   TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+    item        TEXT NOT NULL DEFAULT '',   -- openHAB item
+    state_topic TEXT NOT NULL DEFAULT '',   -- MQTT topic
+    state_path  TEXT NOT NULL DEFAULT '',
+    mapping     TEXT NOT NULL DEFAULT ''    -- JSON [{value,code}]
+);
 CREATE TABLE IF NOT EXISTS capabilities (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id   TEXT    NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
@@ -60,6 +71,7 @@ CREATE TABLE IF NOT EXISTS capabilities (
     retrievable INTEGER NOT NULL DEFAULT 0,
     reportable  INTEGER NOT NULL DEFAULT 0,
     params      TEXT,
+    invert      INTEGER NOT NULL DEFAULT 0,
     ord         INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS properties (
@@ -69,6 +81,7 @@ CREATE TABLE IF NOT EXISTS properties (
     retrievable INTEGER NOT NULL DEFAULT 0,
     reportable  INTEGER NOT NULL DEFAULT 0,
     params      TEXT,
+    invert      INTEGER NOT NULL DEFAULT 0,
     ord         INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS mqtt_topics (
@@ -78,6 +91,7 @@ CREATE TABLE IF NOT EXISTS mqtt_topics (
     instance   TEXT    NOT NULL,
     set_topic  TEXT    NOT NULL DEFAULT '',
     state_topic TEXT   NOT NULL DEFAULT '',
+    state_path TEXT    NOT NULL DEFAULT '',   -- optional JSON dot-path into state payload
     ord        INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS value_mappings (
@@ -185,12 +199,12 @@ func insertDeviceRow(ctx context.Context, tx *sql.Tx, userID string, d config.De
 
 func insertChildren(ctx context.Context, tx *sql.Tx, d config.Device) error {
 	for i, c := range d.Capabilities {
-		if err := insertCapProp(ctx, tx, "capabilities", d.ID, c.Type, c.Retrievable, c.Reportable, c.Parameters, i); err != nil {
+		if err := insertCapProp(ctx, tx, "capabilities", d.ID, c.Type, c.Retrievable, c.Reportable, c.Parameters, c.Invert, i); err != nil {
 			return err
 		}
 	}
 	for i, p := range d.Properties {
-		if err := insertCapProp(ctx, tx, "properties", d.ID, p.Type, p.Retrievable, p.Reportable, p.Parameters, i); err != nil {
+		if err := insertCapProp(ctx, tx, "properties", d.ID, p.Type, p.Retrievable, p.Reportable, p.Parameters, false, i); err != nil {
 			return err
 		}
 	}
@@ -201,9 +215,23 @@ func insertChildren(ctx context.Context, tx *sql.Tx, d config.Device) error {
 		return err
 	}
 	for i, b := range d.OpenHAB {
+		if b.Kind == "equipment" {
+			continue // discovery identity marker, not a real item binding
+		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO openhab_bindings (device_id, kind, instance, item, ord) VALUES (?, ?, ?, ?, ?)`,
 			d.ID, b.Kind, b.Instance, b.Item, i); err != nil {
+			return err
+		}
+	}
+	if d.Error != nil {
+		mj, err := json.Marshal(d.Error.Mapping)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO device_errors (device_id, item, state_topic, state_path, mapping) VALUES (?, ?, ?, ?, ?)`,
+			d.ID, d.Error.Item, d.Error.State, d.Error.StatePath, string(mj)); err != nil {
 			return err
 		}
 	}
@@ -267,6 +295,13 @@ func (r *CatalogRepo) DeleteDevice(ctx context.Context, userID, id string) (bool
 	return n > 0, nil
 }
 
+// DeleteAllDevices removes all of a user's devices (cascades to their
+// capabilities, topics, mappings and bindings). Used by reset/import.
+func (r *CatalogRepo) DeleteAllDevices(ctx context.Context, userID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM devices WHERE user_id = ?`, userID)
+	return err
+}
+
 func nullRoomID(roomID *string) (sql.NullInt64, error) {
 	if roomID == nil || *roomID == "" {
 		return sql.NullInt64{}, nil
@@ -278,7 +313,7 @@ func nullRoomID(roomID *string) (sql.NullInt64, error) {
 	return sql.NullInt64{Int64: n, Valid: true}, nil
 }
 
-func insertCapProp(ctx context.Context, tx *sql.Tx, table, deviceID, typ string, retr, rep bool, params map[string]any, ord int) error {
+func insertCapProp(ctx context.Context, tx *sql.Tx, table, deviceID, typ string, retr, rep bool, params map[string]any, invert bool, ord int) error {
 	var paramsJSON any
 	if len(params) > 0 {
 		b, err := json.Marshal(params)
@@ -288,18 +323,18 @@ func insertCapProp(ctx context.Context, tx *sql.Tx, table, deviceID, typ string,
 		paramsJSON = string(b)
 	}
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO `+table+` (device_id, type, retrievable, reportable, params, ord)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		deviceID, typ, retr, rep, paramsJSON, ord)
+		`INSERT INTO `+table+` (device_id, type, retrievable, reportable, params, invert, ord)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		deviceID, typ, retr, rep, paramsJSON, invert, ord)
 	return err
 }
 
 func insertTopics(ctx context.Context, tx *sql.Tx, deviceID, kind string, topics []config.MQTTTopic) error {
 	for i, t := range topics {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO mqtt_topics (device_id, kind, instance, set_topic, state_topic, ord)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			deviceID, kind, t.Instance, t.Set, t.State, i); err != nil {
+			`INSERT INTO mqtt_topics (device_id, kind, instance, set_topic, state_topic, state_path, ord)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			deviceID, kind, t.Instance, t.Set, t.State, t.StatePath, i); err != nil {
 			return err
 		}
 	}
