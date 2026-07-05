@@ -76,6 +76,28 @@ MQTT/openHAB connection settings can be overridden by an admin in
 **Settings → Servers** (stored in the DB, applied without a restart); an empty
 DB value falls back to the environment.
 
+### Environment variables
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `SESSION_SECRET` | session-cookie key (required) | — |
+| `ADMIN_USERNAME`, `ADMIN_PASSWORD` | bootstrap admin (required) | — |
+| `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET` | OAuth client for Yandex (required) | — |
+| `MQTT_HOST`, `MQTT_PORT` | broker | `localhost`, `1883` |
+| `MQTT_USER`, `MQTT_PASSWORD` | broker credentials | — |
+| `OPENHAB_URL` | openHAB base URL (enables the transport) | — |
+| `OPENHAB_TOKEN` / `OPENHAB_TOKEN_FILE` | openHAB API token (file preferred) | — |
+| `WEB_PORT` | listen port | `80` |
+| `WEB_BEHIND_PROXY` | serve plain HTTP behind a TLS proxy | `false` |
+| `WEB_TLS_CERT`, `WEB_TLS_KEY` | own TLS (when not behind a proxy) | — |
+| `YANDEX_SKILL_ID`, `YANDEX_OAUTH_TOKEN`, `YANDEX_USER_ID` | proactive callbacks | — |
+| `DB_PATH` | SQLite path | `./data/yandex2mqtt.db` |
+| `DEVICES_FILE` | first-run YAML seed | `./data/devices.yaml` |
+| `LOG_LEVEL` | log level | `info` |
+
+`MQTT_*` and `OPENHAB_*` are the *initial* values; a non-empty DB override from
+the UI takes precedence. Everything else is read once at startup.
+
 Structural catalog errors (unknown capability/property types) abort startup;
 unknown instances/units/values are warnings (forward-compatible with new Yandex
 additions).
