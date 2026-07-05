@@ -2,10 +2,10 @@
 .env
 /data/
 
-# Build output
+# Build output (anchored to repo root — иначе паттерн глотает cmd/yandex2mqtt/)
 /bin/
-yandex2mqtt
-yandex2mqtt.exe
+/yandex2mqtt
+/yandex2mqtt.exe
 *.db
 *.db-shm
 *.db-wal
