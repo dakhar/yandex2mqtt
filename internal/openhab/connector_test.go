@@ -102,6 +102,33 @@ func TestHandleSSEIgnoresUnknownAndUndef(t *testing.T) {
 	}
 }
 
+// A video_stream item that holds a server-relative HLS path must be resolved
+// against the openHAB base URL so get_stream returns a fetchable absolute URL.
+func TestStreamItemPathResolvedToAbsolute(t *testing.T) {
+	c := NewConnector(config.OpenHAB{URL: "http://oh:8080/", Token: "t"}, discardLog(), nil)
+	defer c.Close()
+
+	cam := device.New(config.Device{
+		ID: "CAM", Type: "devices.types.camera", AllowedUsers: []string{"1"},
+		Transport:    "openhab",
+		OpenHAB:      []config.OpenHABBinding{{Kind: "cap", Instance: device.StreamInstance, Item: "CamDoorHlsUrl"}},
+		Capabilities: []config.Capability{{Type: "devices.capabilities.video_stream"}},
+	}, nil, nil)
+	c.devices["CAM"] = cam
+	c.subs["CamDoorHlsUrl"] = []sub{{deviceID: "CAM", instance: device.StreamInstance}}
+
+	c.handleSSEData(`{"topic":"openhab/items/CamDoorHlsUrl/statechanged","payload":"{\"value\":\"/ipcamera/door/ipcamera.m3u8\"}"}`)
+
+	res := cam.SetCapabilityState(nil, "devices.capabilities.video_stream", device.StreamInstance, false)
+	m, ok := res.State.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("get_stream did not return a value map: %+v", res)
+	}
+	if got := m["stream_url"]; got != "http://oh:8080/ipcamera/door/ipcamera.m3u8" {
+		t.Fatalf("stream_url = %v, want absolute openHAB URL", got)
+	}
+}
+
 func TestConnectorTransport(t *testing.T) {
 	c := NewConnector(config.OpenHAB{URL: "http://x", Token: "t"}, discardLog(), nil)
 	if c.Transport() != "openhab" {

@@ -306,7 +306,14 @@ func (c *Connector) route(item, value string) {
 		if d == nil {
 			continue
 		}
-		d.UpdateFromMQTT(value, s.instance, s.isProp)
+		val := value
+		// A video_stream item may hold a server-relative HLS path (the IpCamera
+		// binding exposes /ipcamera/<id>/ipcamera.m3u8); resolve it against the
+		// openHAB base URL so streamURL is a fetchable absolute URL.
+		if s.instance == device.StreamInstance && strings.HasPrefix(val, "/") {
+			val = c.base() + val
+		}
+		d.UpdateFromMQTT(val, s.instance, s.isProp)
 		if c.onUpdate != nil {
 			c.onUpdate(d, s.instance, s.isProp)
 		}
