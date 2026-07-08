@@ -304,16 +304,21 @@ function renderParams(rowId, data) {
   }
   if (mapRows) {
     const selSet = new Set((dParams[actType === 'event' ? 'events' : 'modes'] || []).map(x => String(x.value)));
+    // Several device values can map to one Yandex value (e.g. on_off: cleaning,
+    // moving, paused all -> true) — accumulate them comma-separated for editing.
     const inMap = {};
-    (d.mapping || []).forEach(p => { inMap[String(p.yandex)] = p.mqtt; });
-    const hint = mapSelectable ? 'отметь нужные значения; справа впиши, чем это приходит от устройства'
-                               : 'справа впиши, чем это приходит от устройства (пусто = определяется автоматически)';
+    (d.mapping || []).forEach(p => {
+      const k = String(p.yandex);
+      inMap[k] = inMap[k] === undefined || inMap[k] === '' ? fmt(p.mqtt) : inMap[k] + ',' + fmt(p.mqtt);
+    });
+    const hint = mapSelectable ? 'отметь нужные значения; справа впиши, чем это приходит от устройства (несколько — через запятую)'
+                               : 'справа впиши, чем это приходит от устройства; несколько значений — через запятую (пусто = определяется автоматически)';
     const rowHtml = r => {
       const cb = mapSelectable
         ? `<input type="checkbox" class="f-vsel" value="${r.v}"${selSet.has(String(r.v)) ? ' checked' : ''}>`
         : `<span></span>`;
       return `<div class="vrow${r.rec ? ' rec' : ''}">${cb}<span class="vlabel">${r.label}</span>
-              <input type="text" class="f-vin" list="opts-${rowId}" data-val="${r.v}" value="${attr(fmt(inMap[String(r.v)]))}" placeholder="напр. ON · 1 · heat"></div>`;
+              <input type="text" class="f-vin" list="opts-${rowId}" data-val="${r.v}" value="${attr(fmt(inMap[String(r.v)]))}" placeholder="напр. ON · cleaning,moving,paused"></div>`;
     };
     // Collapse the long tail of unused mode values under a toggle; keep
     // recommended / selected / already-mapped rows visible.
@@ -406,7 +411,11 @@ function collect(kind) {
         const cb = row.querySelector('.f-vsel[value="' + el.dataset.val + '"]');
         if (!cb || !cb.checked) return;
       }
-      pairs.push({ yandex: parseVal(el.dataset.val), mqtt: parseVal(inv) });
+      // A comma-separated cell means several device values map to this one Yandex
+      // value (e.g. on_off true <- cleaning,moving,paused).
+      inv.split(',').map(s => s.trim()).filter(s => s !== '').forEach(one => {
+        pairs.push({ yandex: parseVal(el.dataset.val), mqtt: parseVal(one) });
+      });
     });
     if (pairs.length) item.mapping = pairs;
     out.push(item);

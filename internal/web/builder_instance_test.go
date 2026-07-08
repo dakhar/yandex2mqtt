@@ -138,3 +138,30 @@ func TestColorSettingSplitMergeRoundTrip(t *testing.T) {
 		t.Fatalf("merged device lost a binding: %+v", back.OpenHAB)
 	}
 }
+
+// on_off may map several device values to one Yandex bool (vacuum status:
+// cleaning/moving/paused -> on). The mapping must round-trip via toInput/buildDevice.
+func TestOnOffManyToOneMappingRoundTrip(t *testing.T) {
+	d := config.Device{
+		Transport: "openhab", Type: "devices.types.vacuum_cleaner",
+		Capabilities: []config.Capability{{Type: "devices.capabilities.on_off", Retrievable: true}},
+		OpenHAB:      []config.OpenHABBinding{{Kind: "cap", Instance: "on", Item: "Status"}},
+		ValueMapping: []config.ValueMapping{{Type: "on_off", Mapping: []config.InstanceMapping{
+			{Instance: "on", Mapping: [][]any{{true, true, true}, {"cleaning", "moving", "paused"}}},
+		}}},
+	}
+	in := toInput(d, "")
+	if n := len(in.Capabilities[0].Mapping); n != 3 {
+		t.Fatalf("toInput mapping pairs = %d, want 3", n)
+	}
+	back := buildDevice("u", "id", in)
+	var dev []any
+	for _, vm := range back.ValueMapping {
+		if vm.Type == "on_off" {
+			dev = vm.Mapping[0].Mapping[1]
+		}
+	}
+	if len(dev) != 3 {
+		t.Fatalf("round-trip device values = %v, want 3 (cleaning/moving/paused)", dev)
+	}
+}
