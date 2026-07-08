@@ -129,7 +129,7 @@ func featuresForItem(it ohItem, ctxType string) ([]feature, string) {
 		}
 		// A String speed setpoint (options like off/low/medium/high) -> fan_speed.
 		if hasTag(it.Tags, "Speed") {
-			return []feature{stringFanSpeed(it)}, "devices.types.ventilation.fan"
+			return []feature{stringSpeed(it)}, "devices.types.ventilation.fan"
 		}
 	case "Dimmer":
 		return dimmerFeatures(it, ctxType)
@@ -190,7 +190,7 @@ func dimmerFeatures(it ohItem, ctxType string) ([]feature, string) {
 	case "Brightness":
 		return dimLight()
 	case "Speed":
-		return []feature{fanSpeedFeature(it)}, "devices.types.ventilation.fan"
+		return []feature{speedFeature(it)}, "devices.types.ventilation.fan"
 	case "ColorTemperature":
 		return colorTemp()
 	case "Temperature":
@@ -300,7 +300,7 @@ func numberFeature(it ohItem, role, prop, ctxType string) ([]feature, string) {
 		}
 	case "Speed":
 		if setpoint {
-			return []feature{fanSpeedFeature(it)}, "devices.types.ventilation.fan"
+			return []feature{speedFeature(it)}, "devices.types.ventilation.fan"
 		}
 	}
 	return nil, ""
@@ -464,44 +464,80 @@ func rangeParams(it ohItem, dMin, dMax, dPrec float64) (float64, float64, float6
 	return min, max, prec
 }
 
-// stringFanSpeed builds a fan_speed mode capability from a String item's options
-// (off/low/medium/high). Option values that are valid Yandex fan_speed modes map
-// to themselves; others (e.g. "off") are dropped — power is the on_off.
-func stringFanSpeed(it ohItem) feature {
-	valid := map[string]bool{}
-	for _, m := range device.RecommendedModes("fan_speed") {
-		valid[m] = true
+// speedInstance picks the Yandex mode instance for a Speed property. A generic
+// Speed is "work speed"; it is only "fan speed" when the item name mentions a
+// fan (e.g. a real ventilation fan), so a vacuum's suction stays work_speed.
+func speedInstance(name string) string {
+	if strings.Contains(strings.ToLower(name), "fan") {
+		return "fan_speed"
 	}
-	var modes []string
+	return "work_speed"
+}
+
+// speedLadder is the ascending intensity vocabulary valid for a speed instance
+// (values must be in Yandex's per-instance allowed set).
+func speedLadder(instance string) []string {
+	if instance == "fan_speed" {
+		return []string{"low", "medium", "high", "turbo"}
+	}
+	return []string{"min", "slow", "medium", "fast", "max", "turbo"} // work_speed
+}
+
+// isOffValue reports a device value meaning "off" (power is the on_off, not a speed).
+func isOffValue(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "off", "0", "none", "stop":
+		return true
+	}
+	return false
+}
+
+// stringSpeed builds a speed mode capability from a String item's enumerated
+// options, mapped positionally onto the instance's intensity ladder (off-like
+// values dropped — power is the on_off). The value mapping translates the
+// device's own tokens.
+func stringSpeed(it ohItem) feature {
+	inst := speedInstance(it.Name)
+	ladder := speedLadder(inst)
+	var opts []string
 	if it.StateDesc != nil {
 		for _, o := range it.StateDesc.Options {
-			if valid[o.Value] {
-				modes = append(modes, o.Value)
+			if !isOffValue(o.Value) {
+				opts = append(opts, o.Value)
 			}
 		}
 	}
-	if len(modes) == 0 {
-		modes = device.RecommendedModes("fan_speed")
+	if len(opts) == 0 || len(opts) > len(ladder) {
+		return capFeat(inst, capMode(inst, device.RecommendedModes(inst)), it.Name)
 	}
-	return capFeat("fan_speed", capMode("fan_speed", modes), it.Name)
-}
-
-// fanSpeedFeature builds a fan_speed mode capability, deriving the mode set and a
-// value mapping (mode <-> device number) from the item's numeric stateDescription.
-func fanSpeedFeature(it ohItem) feature {
-	modes, mapY, mapO := fanSpeedModes(it.StateDesc)
-	f := capFeat("fan_speed", capMode("fan_speed", modes), it.Name)
+	var modes []string
+	var mapY, mapO []any
+	for i, dev := range opts {
+		modes = append(modes, ladder[i])
+		mapY = append(mapY, ladder[i])
+		mapO = append(mapO, dev)
+	}
+	f := capFeat(inst, capMode(inst, modes), it.Name)
 	f.mapY, f.mapO = mapY, mapO
 	return f
 }
 
-// fanSpeedModes maps a numeric speed range onto intensity-ordered fan_speed
-// modes with a value mapping. A 0 minimum is treated as "off" (power is handled
-// by on_off) and skipped. With no usable range it falls back to the recommended
-// modes and no mapping (the user maps values in the builder).
-func fanSpeedModes(sd *ohStateDesc) (modes []string, mapY, mapO []any) {
-	intensity := []string{"low", "medium", "high", "turbo"}
-	fallback := func() ([]string, []any, []any) { return device.RecommendedModes("fan_speed"), nil, nil }
+// speedFeature builds a speed mode capability from a numeric item, deriving the
+// mode set and value mapping (mode <-> device number) from its stateDescription.
+func speedFeature(it ohItem) feature {
+	inst := speedInstance(it.Name)
+	modes, mapY, mapO := speedModes(it.StateDesc, inst)
+	f := capFeat(inst, capMode(inst, modes), it.Name)
+	f.mapY, f.mapO = mapY, mapO
+	return f
+}
+
+// speedModes maps a numeric speed range onto the instance's intensity ladder with
+// a value mapping. A 0 minimum is treated as "off" (power via on_off) and skipped.
+// With no usable range it falls back to the recommended modes and no mapping.
+func speedModes(sd *ohStateDesc, inst string) (modes []string, mapY, mapO []any) {
+	ladder := speedLadder(inst)
+	fallback := func() ([]string, []any, []any) { return device.RecommendedModes(inst), nil, nil }
 	if sd == nil || sd.Minimum == nil || sd.Maximum == nil {
 		return fallback()
 	}
@@ -517,12 +553,12 @@ func fanSpeedModes(sd *ohStateDesc) (modes []string, mapY, mapO []any) {
 	for v := min; v <= *sd.Maximum+1e-9; v += step {
 		values = append(values, v)
 	}
-	if len(values) < 1 || len(values) > len(intensity) {
+	if len(values) < 1 || len(values) > len(ladder) {
 		return fallback()
 	}
 	for i, v := range values {
-		modes = append(modes, intensity[i])
-		mapY = append(mapY, intensity[i])
+		modes = append(modes, ladder[i])
+		mapY = append(mapY, ladder[i])
 		mapO = append(mapO, numClean(v))
 	}
 	return modes, mapY, mapO

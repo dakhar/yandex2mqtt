@@ -46,8 +46,8 @@ func (d *Device) mapValue(val any, actType, instance string, y2m bool) any {
 	}
 
 	idx := -1
-	if !y2m && instance == "fan_speed" {
-		// Inbound fan speed: snap to the nearest configured value first.
+	if !y2m && (instance == "fan_speed" || instance == "work_speed") {
+		// Inbound speed: snap to the nearest configured value first.
 		idx = indexOf(from, closest(val, from))
 	} else {
 		idx = indexOf(from, val)

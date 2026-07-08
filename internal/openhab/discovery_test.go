@@ -350,6 +350,30 @@ func TestFanSpeedAutoMapping(t *testing.T) {
 	}
 }
 
+// A Speed property maps to work_speed by default, and only to fan_speed when the
+// item name mentions a fan.
+func TestSpeedInstanceByName(t *testing.T) {
+	opts := &ohStateDesc{Options: []ohOption{{Value: "low"}, {Value: "medium"}, {Value: "high"}}}
+	cases := map[string]string{
+		"VacuumCleaner_Suction":  "work_speed", // no "fan" -> work speed
+		"Hood_Speed":             "work_speed",
+		"CeilingFan_Speed":       "fan_speed", // "fan" in name -> fan speed
+		"VacuumCleaner_Fanspeed": "fan_speed", // contains "fan"
+	}
+	for name, want := range cases {
+		d, ok := draftForItem(ohItem{Name: name, Type: "String", Tags: []string{"Setpoint", "Speed"}, StateDesc: opts})
+		if !ok || len(d.Capabilities) != 1 {
+			t.Fatalf("%s: ok=%v caps=%d", name, ok, len(d.Capabilities))
+		}
+		if got := d.Capabilities[0].Parameters["instance"]; got != want {
+			t.Fatalf("%s: instance=%v, want %s", name, got, want)
+		}
+		if errs, _ := device.ValidateCatalog([]config.Device{d}); len(errs) > 0 {
+			t.Fatalf("%s: invalid draft (modes not valid for %s?): %v", name, want, errs)
+		}
+	}
+}
+
 func TestGroupPointAggregation(t *testing.T) {
 	// A light whose points are aggregation Groups (Group:Switch/Dimmer) mapped by
 	// groupType; the Point-groups must not become their own devices.
@@ -438,15 +462,16 @@ func TestKitchenHoodInference(t *testing.T) {
 		byInst[c.Type+"|"+capInst(c)] = d.OpenHAB[bindingIndex(d, "cap", capInst(c))].Item
 		_ = i
 	}
-	// Power -> on_off, Light -> backlight toggle (not a 2nd on_off), Speed -> fan_speed.
+	// Power -> on_off, Light -> backlight toggle (not a 2nd on_off), Speed -> work_speed
+	// (item name has no "fan", so it's a generic work speed, not fan_speed).
 	if byInst["devices.capabilities.on_off|on"] != "Power" {
 		t.Fatalf("on_off should be Power: %+v", byInst)
 	}
 	if byInst["devices.capabilities.toggle|backlight"] != "Light" {
 		t.Fatalf("light should be a backlight toggle bound to Light: %+v", byInst)
 	}
-	if byInst["devices.capabilities.mode|fan_speed"] != "Speed" {
-		t.Fatalf("speed should be fan_speed bound to Speed: %+v", byInst)
+	if byInst["devices.capabilities.mode|work_speed"] != "Speed" {
+		t.Fatalf("speed should be work_speed bound to Speed: %+v", byInst)
 	}
 	if errs, _ := device.ValidateCatalog([]config.Device{d}); len(errs) > 0 {
 		t.Fatalf("hood draft invalid: %v", errs)
