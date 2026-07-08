@@ -154,13 +154,29 @@ func (h *Handlers) UpdateDevice(w http.ResponseWriter, r *http.Request) {
 // DeleteDevice removes a device (POST /app/devices/{id}/delete).
 func (h *Handlers) DeleteDevice(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFrom(r.Context())
-	changed, err := h.catalog.DeleteDevice(r.Context(), u.ID, chi.URLParam(r, "id"))
+	ctx := r.Context()
+	id := chi.URLParam(r, "id")
+
+	// Deleting a robot vacuum's parent (whole-house) removes its per-room zones
+	// too — they're one robot; leaving them would orphan the group.
+	if d, _, ok, err := h.catalog.GetDevice(ctx, u.ID, id); err == nil && ok &&
+		d.Vacuum != nil && d.Vacuum.SegmentID == "" {
+		if err := h.catalog.DeleteVacuumGroup(ctx, u.ID, id, d.Vacuum.GroupID); err != nil {
+			http.Error(w, "delete", http.StatusInternalServerError)
+			return
+		}
+		h.reload(ctx)
+		http.Redirect(w, r, "/app", http.StatusFound)
+		return
+	}
+
+	changed, err := h.catalog.DeleteDevice(ctx, u.ID, id)
 	if err != nil {
 		http.Error(w, "delete", http.StatusInternalServerError)
 		return
 	}
 	if changed {
-		h.reload(r.Context())
+		h.reload(ctx)
 	}
 	http.Redirect(w, r, "/app", http.StatusFound)
 }
