@@ -179,6 +179,35 @@ func TestRangeInversion(t *testing.T) {
 	}
 }
 
+func TestVideoStreamGetStream(t *testing.T) {
+	d := New(config.Device{
+		ID: "Cam", Type: "devices.types.camera",
+		MQTT: config.MQTTMapping{Capabilities: []config.MQTTTopic{{Instance: "get_stream", State: "cam/url"}}},
+		Capabilities: []config.Capability{{
+			Type: "devices.capabilities.video_stream", Retrievable: false, Reportable: false,
+			Parameters: map[string]any{"protocols": []any{"hls"}},
+		}},
+	}, nil, nil)
+
+	// Before a URL arrives, get_stream errors.
+	if r := d.SetCapabilityState(map[string]any{"protocols": []any{"hls"}}, "devices.capabilities.video_stream", "get_stream", false); r.State.ActionResult.Status != "ERROR" {
+		t.Fatalf("expected ERROR before URL, got %+v", r.State)
+	}
+	// The URL source updates the stream URL (not reported to Yandex).
+	d.UpdateFromMQTT("https://host/play.m3u8?t=1", StreamInstance, false)
+	if len(d.QueryState().Capabilities) != 0 {
+		t.Fatal("video_stream must not appear in query (not retrievable)")
+	}
+	r := d.SetCapabilityState(map[string]any{"protocols": []any{"hls"}}, "devices.capabilities.video_stream", "get_stream", false)
+	if r.State.ActionResult.Status != "DONE" {
+		t.Fatalf("get_stream status = %q", r.State.ActionResult.Status)
+	}
+	v, _ := r.State.Value.(map[string]any)
+	if v["stream_url"] != "https://host/play.m3u8?t=1" || v["protocol"] != "hls" {
+		t.Fatalf("stream value = %+v", r.State.Value)
+	}
+}
+
 func TestErrorCodeFromStatus(t *testing.T) {
 	d := New(config.Device{
 		ID: "V", Type: "devices.types.vacuum_cleaner",

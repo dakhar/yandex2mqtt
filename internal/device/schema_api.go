@@ -49,6 +49,7 @@ func BuildSchema() Schema {
 			{Type: "devices.capabilities.toggle", Instances: sortedSet(toggleInstances)},
 			{Type: "devices.capabilities.mode", Instances: sortedSet(modeInstances)},
 			{Type: "devices.capabilities.color_setting", Instances: []string{"hsv", "rgb", "temperature_k", "scene"}},
+			{Type: "devices.capabilities.video_stream", Instances: []string{"get_stream"}},
 		},
 		Properties: []PropertySchema{
 			{Type: "devices.properties.float", Instances: sortedKeys(floatUnits), Units: setMapToSlices(floatUnits)},

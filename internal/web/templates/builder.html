@@ -233,6 +233,9 @@ function renderParams(rowId, data) {
              <div><label>precision</label><input type="number" class="f-prec" value="${valOr(rg.precision, 1)}"></div></div>`;
     html += `<label class="hint"><input type="checkbox" class="f-invert"${d.invert ? ' checked' : ''}> Инвертировать проценты <span class="hint">(0% у устройства = 100% у Яндекса — для штор/Rollershutter)</span></label>`;
   }
+  if (actType === 'video_stream') {
+    html += `<div class="hint">Ниже укажи item/топик, где лежит <b>HLS-URL</b> потока (ссылка на .m3u8, отдающая <code>application/vnd.apple.mpegurl</code>). Протокол: hls. Умение не запрашивается и не репортится.</div>`;
+  }
   // Unified value-mapping table for discrete act-types: the left column is the
   // Yandex value (filled in automatically — the user needn't know the enum), the
   // right column is the incoming device value. Empty right cell = no mapping.
@@ -321,13 +324,15 @@ function collect(kind) {
       if (inst === 'temperature_k') params.temperature_k = { min: num(row, '.f-min'), max: num(row, '.f-max') };
       else if (inst === 'hsv' || inst === 'rgb') params.color_model = inst;
     }
+    if (actType === 'video_stream') params.protocols = ['hls'];
     const setEl = row.querySelector('.f-set');
     const itemEl = row.querySelector('.f-item');
     const pathEl = row.querySelector('.f-path');
     const item = {
       type, instance: inst,
-      retrievable: row.querySelector('.f-retr').checked,
-      reportable: row.querySelector('.f-rep').checked,
+      // video_stream is always non-retrievable/non-reportable per Yandex.
+      retrievable: actType !== 'video_stream' && row.querySelector('.f-retr').checked,
+      reportable: actType !== 'video_stream' && row.querySelector('.f-rep').checked,
       params,
       set: setEl ? setEl.value.trim() : '',
       state: row.querySelector('.f-state').value.trim(),

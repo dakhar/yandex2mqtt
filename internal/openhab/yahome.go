@@ -41,6 +41,8 @@ func yahomeFeatures(it ohItem) ([]feature, string, bool) {
 	case "mode":
 		modes := yahomeModeValues(cfg)
 		return []feature{capFeat("mode", capMode("thermostat", modes), it.Name)}, "devices.types.thermostat", true
+	case "video_stream":
+		return []feature{capFeat("get_stream", capVideoStream(), it.Name)}, "devices.types.camera", true
 	}
 	return nil, "", false
 }

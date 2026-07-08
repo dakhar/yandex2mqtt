@@ -533,6 +533,13 @@ func capMode(instance string, modes []string) config.Capability {
 	}
 }
 
+func capVideoStream() config.Capability {
+	return config.Capability{
+		Type: "devices.capabilities.video_stream", Retrievable: false, Reportable: false,
+		Parameters: map[string]any{"protocols": []any{"hls"}},
+	}
+}
+
 func capToggle(instance string) config.Capability {
 	return config.Capability{
 		Type: "devices.capabilities.toggle", Retrievable: true, Reportable: true,

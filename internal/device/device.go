@@ -40,6 +40,7 @@ type Device struct {
 	invert        map[string]bool   // range instance -> invert percentage
 	errorMap      map[string]string // raw status value -> Yandex error_code
 	errorCode     string            // current device-level error_code ("" = none)
+	streamURL     string            // current HLS URL for a video_stream capability
 
 	publish PublishFunc
 	log     *slog.Logger
@@ -205,6 +206,20 @@ func (d *Device) QueryState() QueryResult {
 // Port of setCapabilityState in device.js.
 func (d *Device) SetCapabilityState(val any, capType, instance string, relative bool) ActionCapResult {
 	actType := actTypeOf(capType)
+	// video_stream/get_stream returns the current HLS URL instead of publishing.
+	if actType == "video_stream" {
+		if d.streamURL == "" {
+			return actionErr(capType, instance, "DEVICE_UNREACHABLE", "no stream url")
+		}
+		return ActionCapResult{
+			Type: capType,
+			State: ActionState{
+				Instance:     instance,
+				Value:        map[string]any{"stream_url": d.streamURL, "protocol": "hls"},
+				ActionResult: ActionResult{Status: "DONE"},
+			},
+		}
+	}
 	value := d.mapValue(val, actType, instance, true)
 
 	cap := d.findCap(capType, instance)
@@ -254,6 +269,11 @@ func (d *Device) UpdateFromMQTT(val string, instance string, isProp bool) {
 	// The status source maps to a device-level error_code (unmapped = no error).
 	if instance == ErrorInstance {
 		d.errorCode = d.errorMap[val]
+		return
+	}
+	// The video_stream source carries the current HLS URL (not retrievable).
+	if instance == StreamInstance {
+		d.streamURL = val
 		return
 	}
 	colorInstances := map[string]bool{
@@ -350,6 +370,10 @@ func (d *Device) SetPublisher(p PublishFunc) { d.publish = p }
 // ErrorInstance is the reserved state-binding instance carrying a device's
 // status source, mapped to Yandex's device-level error_code.
 const ErrorInstance = "__error__"
+
+// StreamInstance is the video_stream capability's only instance; its state
+// binding carries the current HLS URL, returned on a get_stream action.
+const StreamInstance = "get_stream"
 
 // ErrorCode returns the device's current Yandex error_code ("" = no error).
 func (d *Device) ErrorCode() string { return d.errorCode }

@@ -42,9 +42,11 @@ type ActionCapResult struct {
 	State ActionState `json:"state"`
 }
 
-// ActionState carries the per-instance action result.
+// ActionState carries the per-instance action result. Value is set only for
+// capabilities that return data (e.g. video_stream get_stream -> stream_url).
 type ActionState struct {
 	Instance     string       `json:"instance"`
+	Value        any          `json:"value,omitempty"`
 	ActionResult ActionResult `json:"action_result"`
 }
 
