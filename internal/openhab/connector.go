@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -307,17 +308,36 @@ func (c *Connector) route(item, value string) {
 			continue
 		}
 		val := value
-		// A video_stream item may hold a server-relative HLS path (the IpCamera
-		// binding exposes /ipcamera/<id>/ipcamera.m3u8); resolve it against the
-		// openHAB base URL so streamURL is a fetchable absolute URL.
-		if s.instance == device.StreamInstance && strings.HasPrefix(val, "/") {
-			val = c.base() + val
+		// A video_stream item may hold a relative HLS path — the IpCamera binding
+		// canonically exposes "ipcamera/<id>/ipcamera.m3u8" (no leading slash), or
+		// "/ipcamera/...". Resolve any non-absolute value against the openHAB base
+		// URL so streamURL is a fetchable absolute URL.
+		if s.instance == device.StreamInstance {
+			val = c.resolveStreamURL(val)
 		}
 		d.UpdateFromMQTT(val, s.instance, s.isProp)
 		if c.onUpdate != nil {
 			c.onUpdate(d, s.instance, s.isProp)
 		}
 	}
+}
+
+// resolveStreamURL turns a video_stream item's value into an absolute URL: an
+// already-absolute http(s) value is returned unchanged; a relative path (with or
+// without a leading slash) is resolved against the openHAB base URL.
+func (c *Connector) resolveStreamURL(val string) string {
+	if val == "" || strings.HasPrefix(val, "http://") || strings.HasPrefix(val, "https://") {
+		return val
+	}
+	base, err := url.Parse(c.base())
+	if err != nil {
+		return val
+	}
+	ref, err := url.Parse(val)
+	if err != nil {
+		return val
+	}
+	return base.ResolveReference(ref).String()
 }
 
 func usableState(s string) bool {

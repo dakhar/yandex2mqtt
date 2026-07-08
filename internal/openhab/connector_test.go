@@ -1,10 +1,12 @@
 package openhab
 
 import (
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/dakhar/yandex2mqtt/internal/config"
@@ -117,15 +119,25 @@ func TestStreamItemPathResolvedToAbsolute(t *testing.T) {
 	c.devices["CAM"] = cam
 	c.subs["CamDoorHlsUrl"] = []sub{{deviceID: "CAM", instance: device.StreamInstance}}
 
-	c.handleSSEData(`{"topic":"openhab/items/CamDoorHlsUrl/statechanged","payload":"{\"value\":\"/ipcamera/door/ipcamera.m3u8\"}"}`)
-
-	res := cam.SetCapabilityState(nil, "devices.capabilities.video_stream", device.StreamInstance, false)
-	m, ok := res.State.Value.(map[string]any)
-	if !ok {
-		t.Fatalf("get_stream did not return a value map: %+v", res)
+	// Canonical IpCamera state has no leading slash; a leading-slash and a full
+	// URL must also resolve correctly.
+	cases := map[string]string{
+		"ipcamera/door/ipcamera.m3u8":      "http://oh:8080/ipcamera/door/ipcamera.m3u8",
+		"/ipcamera/door/ipcamera.m3u8":     "http://oh:8080/ipcamera/door/ipcamera.m3u8",
+		"http://cam.local/door/index.m3u8": "http://cam.local/door/index.m3u8",
 	}
-	if got := m["stream_url"]; got != "http://oh:8080/ipcamera/door/ipcamera.m3u8" {
-		t.Fatalf("stream_url = %v, want absolute openHAB URL", got)
+	for state, want := range cases {
+		payload, _ := json.Marshal(map[string]string{"value": state})
+		c.handleSSEData(`{"topic":"openhab/items/CamDoorHlsUrl/statechanged","payload":` + strconv.Quote(string(payload)) + `}`)
+
+		res := cam.SetCapabilityState(nil, "devices.capabilities.video_stream", device.StreamInstance, false)
+		m, ok := res.State.Value.(map[string]any)
+		if !ok {
+			t.Fatalf("get_stream did not return a value map: %+v", res)
+		}
+		if got := m["stream_url"]; got != want {
+			t.Fatalf("state %q -> stream_url = %v, want %q", state, got, want)
+		}
 	}
 }
 
