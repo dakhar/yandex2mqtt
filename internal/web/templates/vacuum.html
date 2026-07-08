@@ -22,6 +22,7 @@
   <form method="post" action="/app/discover/vacuum" class="vac">
     <input type="hidden" name="item" value="{{.Item}}">
     <h2>{{.Name}} <span class="muted">({{.Item}})</span></h2>
+    {{if not .Segments}}<div class="muted" style="margin-bottom:10px">Сегменты карты пока не получены (item <code>vac_segments</code> пуст). Можно создать родителя «вся квартира» сейчас; по-комнатные зоны появятся здесь, когда робот отдаст карту (разбуди робота).</div>{{end}}
     <table class="users">
       <thead><tr><th>Сегмент</th><th>Комната</th></tr></thead>
       <tbody>

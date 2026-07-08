@@ -99,12 +99,12 @@ func inferVacuums(items []ohItem) []VacuumSetup {
 			}
 		}
 		if mapItem == "" || cleanItem == "" {
-			continue // not a segment-driven vacuum
+			continue // not a segment-driven vacuum (missing yahome markers)
 		}
+		// Segments may be empty if the robot hasn't reported its map yet
+		// (Mapsegments NULL). Still surface the vacuum so the parent can be
+		// created; zones appear once the segment list arrives.
 		segs := parseSegments(byName[mapItem].State)
-		if len(segs) == 0 {
-			continue
-		}
 		// Flatten the equipment subtree into the parent's members: descend through
 		// plain sub-equipment (e.g. the Battery group -> its StateOfCharge point),
 		// but skip the segment aggregation group (its zones are separate devices,

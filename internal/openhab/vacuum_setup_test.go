@@ -95,7 +95,8 @@ func TestInferVacuums(t *testing.T) {
 	}
 }
 
-// A vacuum without a segment list (no Mapsegments) is not a segment setup.
+// Without the yahome markers (vac_segments/vac_queue) a CleaningRobot is not a
+// segment setup.
 func TestInferVacuumsSkipsNonSegment(t *testing.T) {
 	items := []ohItem{
 		{Name: "Vac", Type: "Group", Tags: []string{"CleaningRobot"}},
@@ -103,5 +104,24 @@ func TestInferVacuumsSkipsNonSegment(t *testing.T) {
 	}
 	if got := inferVacuums(items); len(got) != 0 {
 		t.Fatalf("expected no segment setups, got %+v", got)
+	}
+}
+
+// A vacuum whose Mapsegments is still empty (robot asleep / no map yet) is still
+// surfaced so the parent can be created; it just has no segments.
+func TestInferVacuumsEmptySegments(t *testing.T) {
+	gm := []string{"Vac"}
+	ya := func(v string) map[string]ohMeta { return map[string]ohMeta{"yahome": {Value: v}} }
+	items := []ohItem{
+		{Name: "Vac", Type: "Group", Tags: []string{"CleaningRobot"}},
+		{Name: "Vac_Map", Type: "String", GroupNames: gm, State: "NULL", Meta: ya("vac_segments")},
+		{Name: "Vac_Queue", Type: "String", GroupNames: gm, Meta: ya("vac_queue")},
+	}
+	got := inferVacuums(items)
+	if len(got) != 1 {
+		t.Fatalf("expected the vacuum to be surfaced, got %d", len(got))
+	}
+	if len(got[0].Segments) != 0 {
+		t.Fatalf("expected no segments, got %+v", got[0].Segments)
 	}
 }
