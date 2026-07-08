@@ -234,7 +234,7 @@ function renderParams(rowId, data) {
     html += `<label class="hint"><input type="checkbox" class="f-invert"${d.invert ? ' checked' : ''}> Инвертировать проценты <span class="hint">(0% у устройства = 100% у Яндекса — для штор/Rollershutter)</span></label>`;
   }
   if (actType === 'video_stream') {
-    html += `<div class="hint">Ниже укажи item/топик, где лежит <b>HLS-URL</b> потока (ссылка на .m3u8, отдающая <code>application/vnd.apple.mpegurl</code>). Протокол: hls. Умение не запрашивается и не репортится.</div>`;
+    html += `<div class="hint">В поле ниже впиши <b>HLS-URL</b> напрямую (<code>https://…/playlist.m3u8</code>, отдающий <code>application/vnd.apple.mpegurl</code>) — или item/топик, где этот URL хранится (для камер с меняющимся токеном). Протокол: hls; умение не запрашивается и не репортится.</div>`;
   }
   // Unified value-mapping table for discrete act-types: the left column is the
   // Yandex value (filled in automatically — the user needn't know the enum), the

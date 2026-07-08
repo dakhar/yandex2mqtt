@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/dakhar/yandex2mqtt/internal/config"
 )
@@ -417,6 +418,10 @@ func (d *Device) buildBindings(c config.Device) {
 				d.stateBindings = append(d.stateBindings, StateBinding{Instance: b.Instance, Source: b.Item, IsProp: true})
 				continue
 			}
+			if b.Instance == StreamInstance && isStreamURL(b.Item) {
+				d.streamURL = b.Item // a fixed HLS URL, not an item to subscribe to
+				continue
+			}
 			d.cmdTarget[b.Instance] = b.Item
 			d.stateBindings = append(d.stateBindings, StateBinding{Instance: b.Instance, Source: b.Item, IsProp: false})
 		}
@@ -424,6 +429,10 @@ func (d *Device) buildBindings(c config.Device) {
 	}
 	// mqtt (default)
 	for _, t := range c.MQTT.Capabilities {
+		if t.Instance == StreamInstance && isStreamURL(t.State) {
+			d.streamURL = t.State // a fixed HLS URL, not a topic to subscribe to
+			continue
+		}
 		if t.Set != "" {
 			d.cmdTarget[t.Instance] = t.Set
 		}
@@ -436,6 +445,12 @@ func (d *Device) buildBindings(c config.Device) {
 			d.stateBindings = append(d.stateBindings, StateBinding{Instance: t.Instance, Source: t.State, IsProp: true, Path: t.StatePath})
 		}
 	}
+}
+
+// isStreamURL reports whether a video_stream source is a fixed HLS URL rather
+// than an item/topic to subscribe to.
+func isStreamURL(s string) bool {
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
 }
 
 // --- helpers ---
