@@ -78,20 +78,24 @@ func inferVacuums(items []ohItem) []VacuumSetup {
 		if it.Type != "Group" || equipmentType(it.Tags) != "devices.types.vacuum_cleaner" {
 			continue
 		}
+		// The robot's primitives are marked explicitly with yahome metadata (not
+		// guessed from item names): the segment list, the segment-clean queue, the
+		// operation command, and the status source.
 		var mapItem, cleanItem, opItem, statusItem string
 		for _, m := range children[it.Name] {
-			// The on_off state source is marked explicitly with yahome=vac_state
-			// (not guessed from the item name).
-			if v, _, ok := yahomeSpec(m); ok && v == "vac_state" {
-				statusItem = m.Name
+			v, _, ok := yahomeSpec(m)
+			if !ok {
+				continue
 			}
-			switch {
-			case strings.HasSuffix(m.Name, "Mapsegments"):
+			switch v {
+			case "vac_segments":
 				mapItem = m.Name
-			case strings.HasSuffix(m.Name, "Cleansegments"):
+			case "vac_queue":
 				cleanItem = m.Name
-			case strings.HasSuffix(m.Name, "Operation") && !strings.HasSuffix(m.Name, "Operation_Mode"):
+			case "vac_operation":
 				opItem = m.Name
+			case "vac_state":
+				statusItem = m.Name
 			}
 		}
 		if mapItem == "" || cleanItem == "" {
