@@ -1,6 +1,7 @@
 package openhab
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -138,6 +139,50 @@ func TestStreamItemPathResolvedToAbsolute(t *testing.T) {
 		if got := m["stream_url"]; got != want {
 			t.Fatalf("state %q -> stream_url = %v, want %q", state, got, want)
 		}
+	}
+}
+
+// Items must expose name/type/label plus enumerated state options (hints) for
+// the builder's autocomplete + mode-mapping dropdowns.
+func TestItemsListsNamesAndOptions(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/items" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		io.WriteString(w, `[
+			{"name":"VacuumCleaner_Operation_Mode","type":"String","label":"Режим",
+			 "stateDescription":{"options":[{"value":"vacuum"},{"value":"mop"}]}},
+			{"name":"Light_Kitchen","type":"Switch","label":"Свет"}
+		]`)
+	}))
+	defer srv.Close()
+
+	c := NewConnector(config.OpenHAB{URL: srv.URL, Token: "t"}, discardLog(), nil)
+	defer c.Close()
+	items, err := c.Items(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("got %d items", len(items))
+	}
+	if items[0].Name != "VacuumCleaner_Operation_Mode" || items[0].Type != "String" || items[0].Label != "Режим" {
+		t.Fatalf("item[0]=%+v", items[0])
+	}
+	if len(items[0].Options) != 2 || items[0].Options[0] != "vacuum" || items[0].Options[1] != "mop" {
+		t.Fatalf("options=%v", items[0].Options)
+	}
+	if len(items[1].Options) != 0 {
+		t.Fatalf("Switch should have no options: %v", items[1].Options)
+	}
+}
+
+func TestItemsUnconfiguredErrors(t *testing.T) {
+	c := NewConnector(config.OpenHAB{}, discardLog(), nil) // no URL/token
+	defer c.Close()
+	if _, err := c.Items(context.Background()); err == nil {
+		t.Fatal("expected error when openHAB is unconfigured")
 	}
 }
 

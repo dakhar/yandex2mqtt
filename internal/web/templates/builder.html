@@ -6,6 +6,9 @@
 
 {{if .Device}}<div id="device-data" style="display:none">{{.Device}}</div>{{end}}
 
+<!-- openHAB item names for input autocomplete (populated live from openHAB) -->
+<datalist id="oh-items"></datalist>
+
 <div class="wrap builder">
   <div id="errors" class="err" style="display:none"></div>
 
@@ -43,7 +46,7 @@
   <section>
     <h2>Статус → ошибка <span class="hint">(error_code, необязательно)</span></h2>
     <div class="hint">Привязка item/топика статуса к коду ошибки Яндекса (застрял, контейнер полон, низкий заряд…). Приходящее значение, не попавшее в таблицу, означает «нет ошибки».</div>
-    <div class="oh-field"><label>openHAB item статуса</label><input id="err-item" type="text" placeholder="VacuumCleaner_Status"></div>
+    <div class="oh-field"><label>openHAB item статуса</label><input id="err-item" type="text" list="oh-items" placeholder="VacuumCleaner_Status"></div>
     <div class="mqtt-field"><label>MQTT state-топик статуса</label><input id="err-state" type="text" placeholder="device/status"></div>
     <div class="mqtt-field"><label>JSON-путь <span class="hint">(необязательно)</span></label><input id="err-path" type="text" placeholder="напр. error"></div>
     <label>Соответствие: приходящее значение → код Яндекса</label>
@@ -93,6 +96,7 @@
   #errmap .erow button { border:0; background:transparent; color:#c0392b; cursor:pointer; font-size:16px; }
   body[data-transport="openhab"] .mqtt-field { display:none; }
   body[data-transport="mqtt"] .oh-field { display:none; }
+  .oh-missing { border-color:#c0392b !important; background:#fff5f5; }
 </style>
 
 <script>
@@ -120,13 +124,61 @@ document.getElementById('langtog').textContent = LANG === 'en' ? 'RU' : 'EN';
 const dd = document.getElementById('device-data');
 const DEVICE = dd ? JSON.parse(dd.textContent) : null;
 
-fetch('/app/schema').then(r => r.json()).then(s => {
+// openHAB item model (for name autocomplete + mode value-mapping hints). Fetched
+// live and best-effort: if openHAB is down the lists are empty and inputs stay
+// plain text.
+let OH_NAMES = new Set();   // item name -> exists (for the "not found" hint)
+let OH_OPTS = {};           // item name -> [enumerated state values]
+
+function populateOHItems(items) {
+  const dl = document.getElementById('oh-items');
+  dl.innerHTML = '';
+  (items || []).forEach(it => {
+    OH_NAMES.add(it.name);
+    if (it.options && it.options.length) OH_OPTS[it.name] = it.options;
+    const o = document.createElement('option');
+    o.value = it.name;
+    o.label = (it.label ? it.label + ' · ' : '') + it.type;
+    dl.appendChild(o);
+  });
+}
+
+Promise.all([
+  fetch('/app/schema').then(r => r.json()),
+  fetch('/app/openhab/items').then(r => r.json()).catch(() => [])
+]).then(([s, items]) => {
   SCHEMA = s;
+  populateOHItems(items);
   const typeSel = document.getElementById('type');
   s.device_types.forEach(t => typeSel.add(new Option(lbl('device_types', t), t)));
+  document.getElementById('err-item').addEventListener('input', function () { markItem(this); });
   if (DEVICE) prefill(DEVICE);
   onTransport();
 });
+
+// markItem flags an openHAB item input whose value isn't in the live model (a
+// likely typo) — non-blocking, and silent when the model is empty (openHAB down).
+function markItem(el) {
+  const v = el.value.trim();
+  const missing = v !== '' && OH_NAMES.size > 0 && !OH_NAMES.has(v);
+  el.classList.toggle('oh-missing', missing);
+  el.title = missing ? 'item не найден в openHAB' : '';
+}
+
+// refreshRowOpts fills a capability row's value-mapping datalist with the bound
+// item's enumerated states, so the "Приходит от устройства" cells offer the
+// item's own hints as a dropdown.
+function refreshRowOpts(rowId) {
+  const row = document.getElementById(rowId);
+  if (!row) return;
+  const dl = document.getElementById('opts-' + rowId);
+  const itemEl = row.querySelector('.f-item');
+  if (!dl || !itemEl) return;
+  const opts = OH_OPTS[itemEl.value.trim()] || [];
+  dl.innerHTML = opts.map(v => `<option value="${attr(v)}"></option>`).join('');
+}
+
+function onItemChange(rowId, el) { markItem(el); refreshRowOpts(rowId); }
 
 function defsFor(kind) { return kind === 'cap' ? SCHEMA.capabilities : SCHEMA.properties; }
 
@@ -263,7 +315,7 @@ function renderParams(rowId, data) {
         ? `<input type="checkbox" class="f-vsel" value="${r.v}"${selSet.has(String(r.v)) ? ' checked' : ''}>`
         : `<span></span>`;
       return `<div class="vrow${r.rec ? ' rec' : ''}">${cb}<span class="vlabel">${r.label}</span>
-              <input type="text" class="f-vin" data-val="${r.v}" value="${attr(fmt(inMap[String(r.v)]))}" placeholder="напр. ON · 1 · heat"></div>`;
+              <input type="text" class="f-vin" list="opts-${rowId}" data-val="${r.v}" value="${attr(fmt(inMap[String(r.v)]))}" placeholder="напр. ON · 1 · heat"></div>`;
     };
     // Collapse the long tail of unused mode values under a toggle; keep
     // recommended / selected / already-mapped rows visible.
@@ -287,7 +339,8 @@ function renderParams(rowId, data) {
     html += `<div class="grid"><div><label>K min</label><input type="number" class="f-min" value="${valOr(tk.min, 2700)}"></div>
              <div><label>K max</label><input type="number" class="f-max" value="${valOr(tk.max, 6500)}"></div></div>`;
   }
-  html += `<div class="oh-field"><label>openHAB item</label><input type="text" class="f-item" value="${attr(d.item)}" placeholder="Light_Kitchen"></div>`;
+  html += `<div class="oh-field"><label>openHAB item</label><input type="text" class="f-item" list="oh-items" value="${attr(d.item)}" placeholder="Light_Kitchen" oninput="onItemChange('${rowId}', this)"></div>
+           <datalist id="opts-${rowId}"></datalist>`;
   html += `<div class="mqtt-field"><label>MQTT state-топик</label><input type="text" class="f-state" value="${attr(d.state)}" placeholder="yandex/Device/state"></div>`;
   html += `<div class="mqtt-field"><label>JSON-путь в state <span class="hint">(необязательно)</span>
              <div class="hint">Заполняй, только если в одном топике приходит JSON-объект. Путь = имя поля.<br>
@@ -305,6 +358,10 @@ function renderParams(rowId, data) {
            </div>`;
 
   p.innerHTML = html;
+  // Seed the item-name marker and the value-mapping hints for prefilled values.
+  const fi = p.querySelector('.f-item');
+  if (fi) markItem(fi);
+  refreshRowOpts(rowId);
 }
 
 function collect(kind) {

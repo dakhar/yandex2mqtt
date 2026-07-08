@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"unicode/utf8"
 
@@ -10,8 +11,30 @@ import (
 	"github.com/dakhar/yandex2mqtt/internal/auth"
 	"github.com/dakhar/yandex2mqtt/internal/config"
 	"github.com/dakhar/yandex2mqtt/internal/device"
+	"github.com/dakhar/yandex2mqtt/internal/openhab"
 	"github.com/dakhar/yandex2mqtt/internal/store"
 )
+
+// itemLister is the optional capability (satisfied by *openhab.Connector) to list
+// the openHAB item model for the builder's autocomplete + mode-hint dropdowns.
+type itemLister interface {
+	Items(ctx context.Context) ([]openhab.ItemInfo, error)
+}
+
+// OpenHABItems returns the openHAB item model as JSON for the builder UI
+// (GET /app/openhab/items). It degrades gracefully: when openHAB is absent or
+// unreachable it returns an empty list, and the builder falls back to plain
+// text inputs.
+func (h *Handlers) OpenHABItems(w http.ResponseWriter, r *http.Request) {
+	items := []openhab.ItemInfo{}
+	if il, ok := h.discoverer.(itemLister); ok && il != nil {
+		if got, err := il.Items(r.Context()); err == nil {
+			items = got
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(items)
+}
 
 // defaultDiscoveryTag is the initial per-user openHAB discovery filter. Users
 // can change it (or clear it, meaning "all items") in the discovery settings.

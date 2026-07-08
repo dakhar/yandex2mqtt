@@ -76,6 +76,41 @@ func (c *Connector) Discover(ctx context.Context, tag string, flat bool) ([]conf
 	return inferDevices(items, tag), nil
 }
 
+// ItemInfo is a lightweight openHAB item descriptor for the builder UI:
+// name/type/label power the item-name autocomplete, Options carries the item's
+// enumerated state values (hints) for mode value-mapping dropdowns.
+type ItemInfo struct {
+	Name    string   `json:"name"`
+	Type    string   `json:"type"`
+	Label   string   `json:"label"`
+	Options []string `json:"options,omitempty"`
+}
+
+// Items lists the openHAB item model for the builder (autocomplete + mode hints).
+// It is intentionally tolerant: callers treat any error as "no suggestions".
+func (c *Connector) Items(ctx context.Context) ([]ItemInfo, error) {
+	if !c.configured() {
+		return nil, fmt.Errorf("openHAB не настроен")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	var items []ohItem
+	if err := c.getJSON(ctx, "/rest/items?fields=name,type,label,stateDescription", &items); err != nil {
+		return nil, err
+	}
+	out := make([]ItemInfo, 0, len(items))
+	for _, it := range items {
+		info := ItemInfo{Name: it.Name, Type: it.Type, Label: it.Label}
+		if it.StateDesc != nil {
+			for _, o := range it.StateDesc.Options {
+				info.Options = append(info.Options, o.Value)
+			}
+		}
+		out = append(out, info)
+	}
+	return out, nil
+}
+
 // inferDevices walks the openHAB semantic hierarchy (Location -> Equipment ->
 // Point) to produce device drafts:
 //   - Equipment groups become one composite device (member Points -> features).

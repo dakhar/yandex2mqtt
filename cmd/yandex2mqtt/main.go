@@ -224,6 +224,7 @@ func run() error {
 	root.With(sessions.RequireLogin).Post("/app/settings/import", board.ImportConfig)
 	root.With(sessions.RequireLogin).Post("/app/settings/reset", board.ResetConfig)
 	root.With(sessions.RequireLogin).Post("/app/settings/servers", board.ServerConfig)
+	root.With(sessions.RequireLogin).Get("/app/openhab/items", board.OpenHABItems)
 	root.With(sessions.RequireLogin).Get("/app/discover", board.Discover)
 	root.With(sessions.RequireLogin).Post("/app/discover/add", board.AddDiscovered)
 	root.With(sessions.RequireLogin).Post("/app/discover/ignore", board.IgnoreDiscovered)
