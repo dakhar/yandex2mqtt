@@ -87,6 +87,51 @@ func TestCameraHLSInference(t *testing.T) {
 	}
 }
 
+// yahome=cleanup_mode marks a vacuum's cleaning-type selector as a mode/cleanup_mode
+// capability; a modes="yandex=device,..." config also yields the value mapping.
+func TestCleanupModeYahome(t *testing.T) {
+	it := ohItem{
+		Name: "VacuumCleaner_Operation_Mode", Type: "String", Label: "Режим уборки",
+		Meta: map[string]ohMeta{"yahome": {
+			Value:  "cleanup_mode",
+			Config: map[string]any{"modes": "dry_cleaning=vacuum,wet_cleaning=mop,mixed_cleaning=vacuum_and_mop"},
+		}},
+	}
+	d, ok := draftForItem(it)
+	if !ok || d.Type != "devices.types.vacuum_cleaner" || len(d.Capabilities) != 1 {
+		t.Fatalf("ok=%v type=%q caps=%d", ok, d.Type, len(d.Capabilities))
+	}
+	c := d.Capabilities[0]
+	if c.Type != "devices.capabilities.mode" || c.Parameters["instance"] != "cleanup_mode" {
+		t.Fatalf("cap=%+v", c)
+	}
+	if d.OpenHAB[0].Instance != "cleanup_mode" || d.OpenHAB[0].Item != "VacuumCleaner_Operation_Mode" {
+		t.Fatalf("binding=%+v", d.OpenHAB[0])
+	}
+	// The modes config must produce a value mapping (Yandex cleanup_mode -> device).
+	if len(d.ValueMapping) != 1 || len(d.ValueMapping[0].Mapping) != 1 {
+		t.Fatalf("value mapping missing: %+v", d.ValueMapping)
+	}
+	im := d.ValueMapping[0].Mapping[0]
+	if im.Instance != "cleanup_mode" || len(im.Mapping) != 2 {
+		t.Fatalf("instance mapping=%+v", im)
+	}
+	if errs, _ := device.ValidateCatalog([]config.Device{d}); len(errs) > 0 {
+		t.Fatalf("cleanup_mode draft invalid: %v", errs)
+	}
+
+	// Without a modes config: recommended cleanup_mode values, no mapping.
+	it.Meta["yahome"] = ohMeta{Value: "cleanup_mode"}
+	d2, _ := draftForItem(it)
+	modes, _ := d2.Capabilities[0].Parameters["modes"].([]any)
+	if len(modes) == 0 {
+		t.Fatalf("expected recommended modes, got %+v", d2.Capabilities[0].Parameters)
+	}
+	if len(d2.ValueMapping) != 0 {
+		t.Fatalf("no mapping expected without modes config: %+v", d2.ValueMapping)
+	}
+}
+
 // A camera can be one capability of a larger equipment (a vacuum with a camera,
 // a doorbell with a camera): the HLS point contributes a video_stream to the
 // composite device, whose type stays the equipment's.

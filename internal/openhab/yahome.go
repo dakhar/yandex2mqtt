@@ -41,26 +41,47 @@ func yahomeFeatures(it ohItem) ([]feature, string, bool) {
 	case "mode":
 		modes := yahomeModeValues(cfg)
 		return []feature{capFeat("mode", capMode("thermostat", modes), it.Name)}, "devices.types.thermostat", true
+	case "cleanup_mode":
+		// A vacuum's cleaning-type selector (dry/wet/mixed). Modes + an optional
+		// device value mapping come from `modes="dry_cleaning=vacuum,..."`, else the
+		// recommended set (user maps device values in the builder via item hints).
+		modes, mapY, mapO := yahomeModeSpec(cfg, "cleanup_mode")
+		f := capFeat("cleanup_mode", capMode("cleanup_mode", modes), it.Name)
+		f.mapY, f.mapO = mapY, mapO
+		return []feature{f}, "devices.types.vacuum_cleaner", true
 	case "video_stream":
 		return []feature{capFeat("get_stream", capVideoStream(), it.Name)}, "devices.types.camera", true
 	}
 	return nil, "", false
 }
 
-// yahomeModeValues resolves a mode capability's values: the Yandex-side keys of
-// a `modes="heat=ON,off=OFF"` config, or Yandex's recommended thermostat modes.
+// yahomeModeValues resolves a thermostat mode capability's Yandex-side values.
 func yahomeModeValues(cfg map[string]any) []string {
+	modes, _, _ := yahomeModeSpec(cfg, "thermostat")
+	return modes
+}
+
+// yahomeModeSpec parses a `modes="yandex=device,..."` config into the Yandex mode
+// values and an optional value mapping (Yandex <-> device). A key without "=dev"
+// contributes a mode with no mapping. With no config it falls back to the
+// instance's recommended modes and no mapping.
+func yahomeModeSpec(cfg map[string]any, instance string) (modes []string, mapY, mapO []any) {
 	if raw, _ := cfg["modes"].(string); raw != "" {
-		var out []string
 		for _, pair := range strings.Split(raw, ",") {
-			k, _, _ := strings.Cut(strings.TrimSpace(pair), "=")
-			if k != "" {
-				out = append(out, k)
+			k, v, hasV := strings.Cut(strings.TrimSpace(pair), "=")
+			k = strings.TrimSpace(k)
+			if k == "" {
+				continue
+			}
+			modes = append(modes, k)
+			if hasV && strings.TrimSpace(v) != "" {
+				mapY = append(mapY, k)
+				mapO = append(mapO, strings.TrimSpace(v))
 			}
 		}
-		if len(out) > 0 {
-			return out
+		if len(modes) > 0 {
+			return modes, mapY, mapO
 		}
 	}
-	return device.RecommendedModes("thermostat")
+	return device.RecommendedModes(instance), nil, nil
 }
