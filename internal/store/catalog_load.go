@@ -58,8 +58,27 @@ func (r *CatalogRepo) LoadAll(ctx context.Context) ([]config.Device, error) {
 		if devices[i].Error, err = r.loadErrorBinding(ctx, id); err != nil {
 			return nil, err
 		}
+		if devices[i].Vacuum, err = r.loadVacuumZone(ctx, id); err != nil {
+			return nil, err
+		}
 	}
 	return devices, nil
+}
+
+// loadVacuumZone loads a device's robot-vacuum zone linkage (nil if none).
+func (r *CatalogRepo) loadVacuumZone(ctx context.Context, deviceID string) (*config.VacuumZone, error) {
+	var v config.VacuumZone
+	err := r.db.QueryRowContext(ctx,
+		`SELECT group_id, segment_id, clean_target, op_target, home_cmd, debounce_ms
+		 FROM vacuum_zones WHERE device_id = ?`, deviceID).
+		Scan(&v.GroupID, &v.SegmentID, &v.CleanTarget, &v.OpTarget, &v.HomeCmd, &v.DebounceMs)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &v, nil
 }
 
 // loadErrorBinding loads the device's status->error_code binding (nil if none).
@@ -136,6 +155,9 @@ func (r *CatalogRepo) GetDevice(ctx context.Context, userID, id string) (config.
 		return config.Device{}, "", false, err
 	}
 	if d.Error, err = r.loadErrorBinding(ctx, id); err != nil {
+		return config.Device{}, "", false, err
+	}
+	if d.Vacuum, err = r.loadVacuumZone(ctx, id); err != nil {
 		return config.Device{}, "", false, err
 	}
 	return d, roomID, true, nil

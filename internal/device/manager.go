@@ -3,7 +3,9 @@ package device
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/dakhar/yandex2mqtt/internal/config"
 )
@@ -32,6 +34,9 @@ type Manager struct {
 	connectors map[string]Connector
 	log        *slog.Logger
 	reg        atomic.Pointer[Registry]
+
+	mu           sync.Mutex
+	vacuumGroups []*VacuumGroup // active aggregators, replaced each Reload
 }
 
 // NewManager returns a manager with an empty registry; call Reload to populate.
@@ -66,6 +71,26 @@ func (m *Manager) Reload(ctx context.Context) error {
 		devices = append(devices, d)
 	}
 
+	// Robot-vacuum zones: one shared VacuumGroup per group id, wired to the same
+	// connector's publisher as its devices. devices[i] corresponds to defs[i].
+	groups := map[string]*VacuumGroup{}
+	for i, def := range defs {
+		v := def.Vacuum
+		if v == nil {
+			continue
+		}
+		g := groups[v.GroupID]
+		if g == nil {
+			g = NewVacuumGroup(v.CleanTarget, v.OpTarget, v.HomeCmd, time.Duration(v.DebounceMs)*time.Millisecond)
+			if c, ok := m.connectors[devices[i].Transport]; ok {
+				g.SetPublisher(c.Publish)
+			}
+			groups[v.GroupID] = g
+		}
+		devices[i].SetVacuumGroup(g, v.SegmentID)
+	}
+	m.swapVacuumGroups(groups)
+
 	m.reg.Store(NewRegistry(devices))
 	// Re-sync every connector, even ones with no devices (clears old subs).
 	for name, c := range m.connectors {
@@ -73,6 +98,22 @@ func (m *Manager) Reload(ctx context.Context) error {
 	}
 	m.log.Info("catalog reloaded", "devices", len(devices), "transports", len(byTransport))
 	return nil
+}
+
+// swapVacuumGroups stops the previous reload's aggregators (cancelling pending
+// dispatch timers) and installs the new set.
+func (m *Manager) swapVacuumGroups(groups map[string]*VacuumGroup) {
+	next := make([]*VacuumGroup, 0, len(groups))
+	for _, g := range groups {
+		next = append(next, g)
+	}
+	m.mu.Lock()
+	old := m.vacuumGroups
+	m.vacuumGroups = next
+	m.mu.Unlock()
+	for _, g := range old {
+		g.Stop()
+	}
 }
 
 func (m *Manager) registry() *Registry { return m.reg.Load() }

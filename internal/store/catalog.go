@@ -108,6 +108,15 @@ CREATE TABLE IF NOT EXISTS value_mapping_rows (
     yandex_value TEXT    NOT NULL,           -- JSON (preserves bool/number/string type)
     mqtt_value   TEXT    NOT NULL            -- JSON
 );
+CREATE TABLE IF NOT EXISTS vacuum_zones (
+    device_id    TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+    group_id     TEXT NOT NULL,
+    segment_id   TEXT NOT NULL,
+    clean_target TEXT NOT NULL DEFAULT '',
+    op_target    TEXT NOT NULL DEFAULT '',
+    home_cmd     TEXT NOT NULL DEFAULT '',
+    debounce_ms  INTEGER NOT NULL DEFAULT 0
+);
 CREATE INDEX IF NOT EXISTS idx_dev_user  ON devices(user_id);
 CREATE INDEX IF NOT EXISTS idx_cap_dev   ON capabilities(device_id);
 CREATE INDEX IF NOT EXISTS idx_prop_dev  ON properties(device_id);
@@ -232,6 +241,14 @@ func insertChildren(ctx context.Context, tx *sql.Tx, d config.Device) error {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO device_errors (device_id, item, state_topic, state_path, mapping) VALUES (?, ?, ?, ?, ?)`,
 			d.ID, d.Error.Item, d.Error.State, d.Error.StatePath, string(mj)); err != nil {
+			return err
+		}
+	}
+	if v := d.Vacuum; v != nil {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO vacuum_zones (device_id, group_id, segment_id, clean_target, op_target, home_cmd, debounce_ms)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			d.ID, v.GroupID, v.SegmentID, v.CleanTarget, v.OpTarget, v.HomeCmd, v.DebounceMs); err != nil {
 			return err
 		}
 	}

@@ -28,6 +28,22 @@ type Device struct {
 	OpenHAB []OpenHABBinding `yaml:"openhab,omitempty"`
 	// Error binds a device status source to Yandex's device-level error_code.
 	Error *ErrorBinding `yaml:"error,omitempty"`
+	// Vacuum, when set, makes this device a robot-vacuum zone: its on_off is
+	// aggregated with the other zones of the same GroupID into one segment-clean
+	// command (see device.VacuumGroup) instead of publishing directly.
+	Vacuum *VacuumZone `yaml:"vacuum,omitempty"`
+}
+
+// VacuumZone links a per-room device to its robot's shared clean/stop targets.
+// All zones of one robot share GroupID and the same targets; SegmentID is the
+// robot's id for this room's map segment.
+type VacuumZone struct {
+	GroupID     string `yaml:"group_id"`
+	SegmentID   string `yaml:"segment_id"`
+	CleanTarget string `yaml:"clean_target"`         // segment-clean command (Cleansegments)
+	OpTarget    string `yaml:"op_target,omitempty"`  // operation command for stop/home
+	HomeCmd     string `yaml:"home_cmd,omitempty"`   // payload to stop/return (default "HOME")
+	DebounceMs  int    `yaml:"debounce_ms,omitempty"` // union debounce window (0 = default)
 }
 
 // ErrorBinding maps a device's status item/topic to a Yandex error_code. Source

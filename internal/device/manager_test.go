@@ -2,7 +2,9 @@ package device
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/dakhar/yandex2mqtt/internal/config"
 )
@@ -73,6 +75,64 @@ func TestManagerReloadAndSwap(t *testing.T) {
 	d.SetCapabilityState(true, "devices.capabilities.on_off", "on", false)
 	if bridge.publishC == 0 {
 		t.Fatalf("expected publish through wired bridge")
+	}
+}
+
+// capturingBridge records published (target,payload) pairs.
+type capturingBridge struct {
+	mu   sync.Mutex
+	msgs [][2]string
+}
+
+func (b *capturingBridge) Transport() string        { return "mqtt" }
+func (b *capturingBridge) Resync(devices []*Device) {}
+func (b *capturingBridge) Publish(target, p string) {
+	b.mu.Lock()
+	b.msgs = append(b.msgs, [2]string{target, p})
+	b.mu.Unlock()
+}
+func (b *capturingBridge) find(target string) (string, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, m := range b.msgs {
+		if m[0] == target {
+			return m[1], true
+		}
+	}
+	return "", false
+}
+
+// Two zone devices with the same group share one aggregator: turning both on
+// dispatches a single union to the clean target, wired via the connector.
+func TestManagerWiresVacuumGroup(t *testing.T) {
+	zone := func(id, seg string) config.Device {
+		d := dev(id, "1")
+		d.Type = "devices.types.vacuum_cleaner"
+		d.Vacuum = &config.VacuumZone{
+			GroupID: "robot", SegmentID: seg, CleanTarget: "Clean", OpTarget: "Op",
+			HomeCmd: "HOME", DebounceMs: 30,
+		}
+		return d
+	}
+	bridge := &capturingBridge{}
+	m := NewManager(&fakeLoader{devices: []config.Device{zone("A", "1"), zone("B", "2")}},
+		map[string]Connector{"mqtt": bridge}, nil)
+	if err := m.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	a, _ := m.ByID("A")
+	b, _ := m.ByID("B")
+	a.SetCapabilityState(true, "devices.capabilities.on_off", "on", false)
+	b.SetCapabilityState(true, "devices.capabilities.on_off", "on", false)
+	time.Sleep(80 * time.Millisecond)
+
+	got, ok := bridge.find("Clean")
+	if !ok {
+		t.Fatalf("no clean command published: %v", bridge.msgs)
+	}
+	if got != `{"segment_ids":["1","2"]}` {
+		t.Fatalf("union payload = %q", got)
 	}
 }
 
