@@ -26,6 +26,9 @@
     {{if .AddError}}
       <div class="err">{{if eq .AddError "name"}}Название длиннее 25 символов (ограничение Алисы) — сократите его через «Настроить» и добавьте.{{else}}Не удалось добавить устройство.{{end}}</div>
     {{end}}
+    {{if .HasVacuums}}
+      <div class="vac-banner">🤖 Обнаружен робот-пылесос с сегментами. Он настраивается отдельно — комнаты по сегментам: <a href="/app/discover/vacuum">Настроить робот-пылесос →</a></div>
+    {{end}}
     {{if .Error}}
       <div class="err">Не удалось прочитать openHAB: {{.Error}}</div>
     {{else if not .Drafts}}
@@ -59,6 +62,8 @@
 </div>
 
 <style>
+  .vac-banner { background:#eef6ff; border:1px solid #b6d4fe; border-radius:10px; padding:10px 14px; margin-bottom:14px; font-size:14px; }
+  .vac-banner a { font-weight:600; white-space:nowrap; }
   .wrap { padding: 20px; }
   .wrap code { background:#eef0f3; padding:1px 5px; border-radius:4px; font-size:13px; }
   .disc-settings { display:flex; align-items:center; gap:16px; margin-bottom:16px; }

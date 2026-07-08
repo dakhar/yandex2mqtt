@@ -518,6 +518,8 @@ func defaultInstance(capType string) string {
 		return "on"
 	case "color_setting":
 		return "hsv" // discovery color drafts use hsv; user can adjust
+	case "video_stream":
+		return "get_stream"
 	}
 	return ""
 }

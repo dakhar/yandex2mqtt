@@ -115,6 +115,20 @@ func (h *Handlers) Discover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Segment-driven robot vacuums are configured on their own page (parent +
+	// per-room zones); hide their equipment from the flat list so users don't
+	// land in the useless single-composite card.
+	vacuumItems := map[string]bool{}
+	hasVacuums := false
+	if vl, ok := h.discoverer.(vacuumLister); ok {
+		if setups, err := vl.VacuumSetups(ctx); err == nil {
+			for _, s := range setups {
+				vacuumItems[s.Item] = true
+			}
+			hasVacuums = len(setups) > 0
+		}
+	}
+
 	imported := map[string]bool{}
 	if items, err := h.catalog.ImportedOpenHABItems(ctx, u.ID); err == nil {
 		for _, it := range items {
@@ -133,7 +147,7 @@ func (h *Handlers) Discover(w http.ResponseWriter, r *http.Request) {
 	views := make([]draftView, 0, len(drafts))
 	for _, d := range drafts {
 		src := sourceItem(d)
-		if src == "" || ignored[src] || draftImported(d, imported) {
+		if src == "" || ignored[src] || vacuumItems[src] || draftImported(d, imported) {
 			continue
 		}
 		v := draftView{Item: src, Name: d.Name, Type: d.Type, Room: d.Room}
@@ -146,7 +160,8 @@ func (h *Handlers) Discover(w http.ResponseWriter, r *http.Request) {
 		views = append(views, v)
 	}
 	h.render(w, "discover.html", map[string]any{
-		"User": u, "Drafts": views, "Tag": tag, "Flat": flat, "AddError": r.URL.Query().Get("err"),
+		"User": u, "Drafts": views, "Tag": tag, "Flat": flat, "HasVacuums": hasVacuums,
+		"AddError": r.URL.Query().Get("err"),
 	})
 }
 
