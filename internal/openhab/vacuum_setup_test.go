@@ -23,7 +23,7 @@ func TestInferVacuums(t *testing.T) {
 		// Segment aggregation group (Group:Switch) must NOT add a parent on_off.
 		{Name: "gVacuum_Segments", Type: "Group", GroupType: "Switch", GroupNames: gm("VacuumCleaner")},
 		{Name: "VacuumCleaner_Status", Type: "String", Tags: []string{"Status"}, GroupNames: gm("VacuumCleaner"),
-			Meta: map[string]ohMeta{"vac_state": {Value: "on_off"}}},
+			Meta: map[string]ohMeta{"yahome": {Value: "vac_state"}}},
 	}
 	setups := inferVacuums(items)
 	if len(setups) != 1 {

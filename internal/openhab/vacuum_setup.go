@@ -50,7 +50,7 @@ func (c *Connector) VacuumSetups(ctx context.Context) ([]VacuumSetup, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	var items []ohItem
-	if err := c.getJSON(ctx, "/rest/items?metadata=yahome,semantics,vac_state&fields=name,type,label,state,tags,groupNames,metadata,stateDescription", &items); err != nil {
+	if err := c.getJSON(ctx, "/rest/items?metadata=yahome,semantics&fields=name,type,label,state,tags,groupNames,metadata,stateDescription", &items); err != nil {
 		return nil, err
 	}
 	return inferVacuums(items), nil
@@ -80,9 +80,9 @@ func inferVacuums(items []ohItem) []VacuumSetup {
 		}
 		var mapItem, cleanItem, opItem, statusItem string
 		for _, m := range children[it.Name] {
-			// The on_off state source is marked explicitly with a `vac_state`
-			// metadata namespace (not guessed from the item name).
-			if _, ok := m.Meta["vac_state"]; ok {
+			// The on_off state source is marked explicitly with yahome=vac_state
+			// (not guessed from the item name).
+			if v, _, ok := yahomeSpec(m); ok && v == "vac_state" {
 				statusItem = m.Name
 			}
 			switch {
