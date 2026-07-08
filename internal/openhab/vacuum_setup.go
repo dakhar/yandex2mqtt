@@ -91,7 +91,31 @@ func inferVacuums(items []ohItem) []VacuumSetup {
 		if len(segs) == 0 {
 			continue
 		}
-		parent, _ := draftForGroup(it, children[it.Name])
+		// Flatten the equipment subtree into the parent's members: descend through
+		// plain sub-equipment (e.g. the Battery group -> its StateOfCharge point),
+		// but skip the segment aggregation group (its zones are separate devices,
+		// and the parent's on/off is the whole-house Operation) and Locations.
+		var parentMembers []ohItem
+		seen := map[string]bool{}
+		var walk func(name string)
+		walk = func(name string) {
+			for _, m := range children[name] {
+				if seen[m.Name] {
+					continue
+				}
+				seen[m.Name] = true
+				if m.Type == "Group" && (m.GroupType != "" || isLocation(m.Tags)) {
+					continue // aggregation (segments) or location: not a parent feature
+				}
+				parentMembers = append(parentMembers, m)
+				if m.Type == "Group" {
+					walk(m.Name) // descend into plain sub-equipment (Battery, ...)
+				}
+			}
+		}
+		walk(it.Name)
+
+		parent, _ := draftForGroup(it, parentMembers)
 		parent.Type = "devices.types.vacuum_cleaner"
 		parent.Room = resolveRoom(it, byName, locName) // its Location ancestor
 		if opItem != "" {

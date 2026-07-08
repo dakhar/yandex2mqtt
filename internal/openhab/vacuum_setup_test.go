@@ -17,6 +17,11 @@ func TestInferVacuums(t *testing.T) {
 		{Name: "VacuumCleaner_Cleansegments", Type: "String", GroupNames: gm("VacuumCleaner")},
 		{Name: "VacuumCleaner_Operation", Type: "String", Tags: []string{"Control"}, GroupNames: gm("VacuumCleaner")},
 		{Name: "VacuumCleaner_CameraHlsUrl", Type: "String", GroupNames: gm("VacuumCleaner")},
+		// Nested battery sub-equipment: its StateOfCharge point must surface on the parent.
+		{Name: "VacuumCleaner_Battery", Type: "Group", Tags: []string{"Battery"}, GroupNames: gm("VacuumCleaner")},
+		{Name: "VacuumCleaner_Battery_Level", Type: "Number", Tags: []string{"Measurement", "StateOfCharge"}, GroupNames: gm("VacuumCleaner_Battery")},
+		// Segment aggregation group (Group:Switch) must NOT add a parent on_off.
+		{Name: "gVacuum_Segments", Type: "Group", GroupType: "Switch", GroupNames: gm("VacuumCleaner")},
 	}
 	setups := inferVacuums(items)
 	if len(setups) != 1 {
@@ -40,6 +45,26 @@ func TestInferVacuums(t *testing.T) {
 	}
 	if !has["devices.capabilities.on_off"] || !has["devices.capabilities.toggle"] || !has["devices.capabilities.video_stream"] {
 		t.Fatalf("parent caps: %+v", s.Parent.Capabilities)
+	}
+	// Only one on_off (whole-house -> Operation), not one from the segment group.
+	onoff := 0
+	for _, c := range s.Parent.Capabilities {
+		if c.Type == "devices.capabilities.on_off" {
+			onoff++
+		}
+	}
+	if onoff != 1 {
+		t.Fatalf("expected exactly one on_off, got %d", onoff)
+	}
+	// Battery level from the nested Battery sub-equipment.
+	battery := false
+	for _, p := range s.Parent.Properties {
+		if p.Parameters["instance"] == "battery_level" {
+			battery = true
+		}
+	}
+	if !battery {
+		t.Fatalf("parent missing battery_level: %+v", s.Parent.Properties)
 	}
 	// The parent's room comes from its openHAB Location ancestor.
 	if s.Parent.Room != "Дом" {
