@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -27,11 +28,18 @@ import (
 	"github.com/dakhar/yandex2mqtt/internal/openhab"
 	"github.com/dakhar/yandex2mqtt/internal/store"
 	"github.com/dakhar/yandex2mqtt/internal/stream"
+	"github.com/dakhar/yandex2mqtt/internal/version"
 	"github.com/dakhar/yandex2mqtt/internal/web"
 	"github.com/dakhar/yandex2mqtt/internal/yandex"
 )
 
 func main() {
+	showVersion := flag.Bool("version", false, "print the build version and exit")
+	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String())
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", err)
 		os.Exit(1)
@@ -48,6 +56,8 @@ func run() error {
 		Level: parseLevel(cfg.LogLevel),
 	}))
 	ctx0 := context.Background()
+
+	logger.Info("yandex2mqtt starting", "version", version.String())
 
 	// Log a redacted summary so we can confirm config loading without ever
 	// printing secrets (the old code dumped all of process.env).
@@ -199,6 +209,7 @@ func run() error {
 	root.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/app", http.StatusFound)
 	})
+	root.Get("/version", board.Version)
 	root.Get("/login", sessions.LoginForm)
 	root.Post("/login", sessions.Login)
 	root.Get("/logout", sessions.Logout)

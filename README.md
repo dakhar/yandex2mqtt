@@ -122,6 +122,18 @@ The service listens on `WEB_PORT`. Set `WEB_BEHIND_PROXY=true` to serve plain
 HTTP (TLS handled upstream). The management UI is at `/app`; log in with the
 admin credentials from `.env`.
 
+## Version
+
+The build version is logged at startup, printed by `yandex2mqtt -version`, served
+at `GET /version`, and shown on the settings page. Inject it at build time:
+
+```sh
+docker compose build --build-arg VERSION=$(git describe --tags --always --dirty)
+```
+
+Without the build-arg it falls back to the embedded VCS commit (plain `go build`
+in the repo) or `dev`.
+
 ## Development
 
 ```sh

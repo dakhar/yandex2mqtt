@@ -9,10 +9,18 @@ import (
 	"github.com/dakhar/yandex2mqtt/internal/config"
 	"github.com/dakhar/yandex2mqtt/internal/device"
 	"github.com/dakhar/yandex2mqtt/internal/openhab"
+	"github.com/dakhar/yandex2mqtt/internal/version"
 )
 
 // homeRoom is where a robot vacuum's parent (whole-house) device lives.
 const homeRoom = "Дом"
+
+// Version writes the build version as plain text (GET /version), for health
+// checks and quick "what's deployed" queries.
+func (h *Handlers) Version(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(version.String()))
+}
 
 // vacuumLister is the optional capability (satisfied by *openhab.Connector) to
 // discover segment-driven robot vacuums.

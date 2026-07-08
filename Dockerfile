@@ -9,7 +9,12 @@ RUN go mod download
 # Build a static binary (modernc sqlite is pure Go, so CGO stays off).
 COPY . .
 ENV CGO_ENABLED=0 GOOS=linux
-RUN go build -trimpath -ldflags="-s -w" -o /out/yandex2mqtt ./cmd/yandex2mqtt
+# VERSION is injected into the binary (defaults to "dev"); pass e.g.
+# --build-arg VERSION=$(git describe --tags --always --dirty).
+ARG VERSION=dev
+RUN go build -trimpath \
+    -ldflags="-s -w -X github.com/dakhar/yandex2mqtt/internal/version.value=${VERSION}" \
+    -o /out/yandex2mqtt ./cmd/yandex2mqtt
 
 # --- runtime stage ---
 FROM alpine:3.20

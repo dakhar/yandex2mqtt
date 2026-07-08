@@ -1,12 +1,13 @@
 {{define "content"}}
 <div class="topbar">
-  <span class="brand">yandex2mqtt · настройки</span>
+  <span class="brand">yandex2mqtt · настройки <span class="ver" title="версия сборки">{{.Version}}</span></span>
   <span>
     <a href="#" id="langtog" onclick="toggleLang();return false" title="Язык / Language"></a>
     <a href="/app">← к доске</a>
     <a href="/logout">выйти</a>
   </span>
 </div>
+<style>.ver{font-size:12px;font-weight:normal;color:#8a8f98;font-family:ui-monospace,monospace;}</style>
 
 <div class="wrap sett">
   {{if .Notice}}<div class="ok">{{if eq .Notice "import"}}Конфигурация импортирована.{{else if eq .Notice "reset"}}Все настройки сброшены.{{else if eq .Notice "tag"}}Сохранено.{{else if eq .Notice "servers"}}Серверы сохранены, переподключение выполнено.{{else}}Готово.{{end}}</div>{{end}}

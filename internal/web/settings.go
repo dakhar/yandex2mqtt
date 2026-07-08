@@ -14,6 +14,7 @@ import (
 	"github.com/dakhar/yandex2mqtt/internal/config"
 	"github.com/dakhar/yandex2mqtt/internal/device"
 	"github.com/dakhar/yandex2mqtt/internal/store"
+	"github.com/dakhar/yandex2mqtt/internal/version"
 )
 
 // backup is the exportable snapshot of a user's configuration.
@@ -55,6 +56,7 @@ func (h *Handlers) Settings(w http.ResponseWriter, r *http.Request) {
 		"RoomCount":   len(rooms),
 		"DeviceCount": len(devs),
 		"IgnoreCount": ignoreCount,
+		"Version":     version.String(),
 		"Notice":      r.URL.Query().Get("ok"),
 		"Error":       r.URL.Query().Get("err"),
 	}
