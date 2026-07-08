@@ -113,6 +113,9 @@ type deviceInput struct {
 	Capabilities []capInput  `json:"capabilities"`
 	Properties   []capInput  `json:"properties"`
 	Errors       []errorRule `json:"errors,omitempty"`
+	// Vacuum marks a robot-vacuum device (parent/zone) so the card can note that
+	// its on_off command is routed to the aggregator, not through the value map.
+	Vacuum bool `json:"vacuum,omitempty"`
 }
 
 // errorRule is one "Yandex code <- item = value" row from the form.
@@ -360,7 +363,7 @@ func toInput(d config.Device, roomID string) deviceInput {
 		}
 	}
 
-	in := deviceInput{Name: d.Name, Type: d.Type, Transport: d.Transport, RoomID: roomID, Description: d.Description}
+	in := deviceInput{Name: d.Name, Type: d.Type, Transport: d.Transport, RoomID: roomID, Description: d.Description, Vacuum: d.Vacuum != nil}
 	for _, e := range d.Errors {
 		in.Errors = append(in.Errors, errorRule{
 			Code: e.Code, Item: e.Item, State: e.State, StatePath: e.StatePath, Value: e.Value,

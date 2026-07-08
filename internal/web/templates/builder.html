@@ -286,6 +286,12 @@ function renderParams(rowId, data) {
   if (actType === 'video_stream') {
     html += `<div class="hint">В поле ниже впиши <b>HLS-URL</b> напрямую (<code>https://…/playlist.m3u8</code>, отдающий <code>application/vnd.apple.mpegurl</code>) — или item/топик, где этот URL хранится (для камер с меняющимся токеном). Для openHAB item может отдавать и относительный путь (<code>/ipcamera/…/ipcamera.m3u8</code>) — он резолвится к адресу сервера openHAB. Протокол: hls; умение не запрашивается и не репортится.</div>`;
   }
+  // Robot vacuum on_off is special: the command is routed to the aggregator
+  // (START/home or segment cleaning), so the table below is state-only —
+  // unlike normal cards where it maps both ways.
+  if (actType === 'on_off' && DEVICE && DEVICE.vacuum) {
+    html += `<div class="hint" style="background:#fff8e1;border:1px solid #ffe08a;border-radius:8px;padding:8px 10px">⚠️ <b>Пылесос:</b> команда вкл/выкл уходит роботу напрямую (<code>START</code>/домой или уборка сегментов), <b>минуя</b> таблицу ниже. Таблица здесь задаёт <b>только чтение состояния</b> — какие статусы считать «включено» (напр. <code>cleaning,moving,paused</code>). В обычных карточках эта таблица работает в обе стороны.</div>`;
+  }
   // Unified value-mapping table for discrete act-types: the left column is the
   // Yandex value (filled in automatically — the user needn't know the enum), the
   // right column is the incoming device value. Empty right cell = no mapping.
