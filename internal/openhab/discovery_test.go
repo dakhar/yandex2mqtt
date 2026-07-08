@@ -60,6 +60,32 @@ func TestDraftForItemInference(t *testing.T) {
 	}
 }
 
+// A canonical IpCamera HLS-URL item becomes a video_stream camera; the sibling
+// snapshot (ImageUrl) does not.
+func TestCameraHLSInference(t *testing.T) {
+	d, ok := draftForItem(ohItem{Name: "CamDoorHlsUrl", Type: "String", Label: "Камера у двери"})
+	if !ok {
+		t.Fatal("Cam*HlsUrl String must be inferred as a camera")
+	}
+	if d.Type != "devices.types.camera" || d.Name != "Камера у двери" {
+		t.Fatalf("camera: type=%q name=%q", d.Type, d.Name)
+	}
+	if len(d.Capabilities) != 1 || d.Capabilities[0].Type != "devices.capabilities.video_stream" {
+		t.Fatalf("camera caps: %+v", d.Capabilities)
+	}
+	if len(d.OpenHAB) != 1 || d.OpenHAB[0].Instance != device.StreamInstance || d.OpenHAB[0].Item != "CamDoorHlsUrl" {
+		t.Fatalf("camera binding: %+v", d.OpenHAB)
+	}
+	if errs, _ := device.ValidateCatalog([]config.Device{d}); len(errs) > 0 {
+		t.Fatalf("camera draft invalid: %v", errs)
+	}
+
+	// The JPG snapshot sibling is not a video_stream.
+	if _, ok := draftForItem(ohItem{Name: "CamDoorImageUrl", Type: "String"}); ok {
+		t.Fatal("Cam*ImageUrl must not be inferred as a camera")
+	}
+}
+
 // Drafts must validate against the Yandex schema so they can be saved.
 func TestDraftsValidate(t *testing.T) {
 	for _, it := range []ohItem{

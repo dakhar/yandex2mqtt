@@ -121,6 +121,12 @@ func featuresForItem(it ohItem, ctxType string) ([]feature, string) {
 		}
 		return []feature{capFeat("on", capOnOff(), it.Name)}, deviceTypeFor(it.Tags, "devices.types.switch")
 	case "String":
+		// A camera's HLS-URL item (the IpCamera binding's canonical Cam<Name>HlsUrl,
+		// holding an ipcamera/.../ipcamera.m3u8 path) -> a video_stream camera. The
+		// connector resolves the relative path to an absolute URL at runtime.
+		if isCameraHLSItem(it) {
+			return []feature{capFeat("get_stream", capVideoStream(), it.Name)}, "devices.types.camera"
+		}
 		// A String speed setpoint (options like off/low/medium/high) -> fan_speed.
 		if hasTag(it.Tags, "Speed") {
 			return []feature{stringFanSpeed(it)}, "devices.types.ventilation.fan"
@@ -298,6 +304,14 @@ func numberFeature(it ohItem, role, prop, ctxType string) ([]feature, string) {
 		}
 	}
 	return nil, ""
+}
+
+// isCameraHLSItem reports whether a String item is a camera's HLS-playlist URL,
+// by the IpCamera binding's canonical Cam<Name>HlsUrl naming (case-insensitive).
+// The sibling Cam<Name>ImageUrl (a JPG snapshot) is intentionally excluded — a
+// video_stream needs the .m3u8 playlist, not a still.
+func isCameraHLSItem(it ohItem) bool {
+	return it.Type == "String" && strings.HasSuffix(strings.ToLower(it.Name), "hlsurl")
 }
 
 // deviceTypeFor picks a device type from an item's own semantic tags.
