@@ -328,7 +328,7 @@ func equipmentType(tags []string) string {
 	for _, t := range tags {
 		switch t {
 		// lighting
-		case "Chandelier", "Ceiling":
+		case "Chandelier":
 			return "devices.types.light.ceiling"
 		case "LightStrip", "LightStripe":
 			return "devices.types.light.strip"
@@ -337,7 +337,7 @@ func equipmentType(tags []string) string {
 			"WallLight", "AccentLight", "Light":
 			return "devices.types.light"
 		// electrics
-		case "PowerOutlet", "WallOutlet":
+		case "PowerOutlet":
 			return "devices.types.socket"
 		case "WallSwitch":
 			return "devices.types.switch"
