@@ -22,7 +22,8 @@ func TestInferVacuums(t *testing.T) {
 		{Name: "VacuumCleaner_Battery_Level", Type: "Number", Tags: []string{"Measurement", "StateOfCharge"}, GroupNames: gm("VacuumCleaner_Battery")},
 		// Segment aggregation group (Group:Switch) must NOT add a parent on_off.
 		{Name: "gVacuum_Segments", Type: "Group", GroupType: "Switch", GroupNames: gm("VacuumCleaner")},
-		{Name: "VacuumCleaner_Status", Type: "String", Tags: []string{"Status"}, GroupNames: gm("VacuumCleaner")},
+		{Name: "VacuumCleaner_Status", Type: "String", Tags: []string{"Status"}, GroupNames: gm("VacuumCleaner"),
+			Meta: map[string]ohMeta{"vac_state": {Value: "on_off"}}},
 	}
 	setups := inferVacuums(items)
 	if len(setups) != 1 {
