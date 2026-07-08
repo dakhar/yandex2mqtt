@@ -96,6 +96,70 @@ func TestVacuumGroupOffBeforeDispatchCancels(t *testing.T) {
 	}
 }
 
+// WholeHouse sends START on / home off to the operation target.
+func TestVacuumGroupWholeHouse(t *testing.T) {
+	cap := &capture{}
+	g := NewVacuumGroup("Clean", "Op", "HOME", 20*time.Millisecond)
+	g.SetPublisher(cap.publish)
+
+	g.WholeHouse(true)
+	if m, _ := cap.last(); m[0] != "Op" || m[1] != "START" {
+		t.Fatalf("on -> %v, want Op/START", m)
+	}
+	g.WholeHouse(false)
+	if m, _ := cap.last(); m[0] != "Op" || m[1] != "HOME" {
+		t.Fatalf("off -> %v, want Op/HOME", m)
+	}
+}
+
+// The parent (empty segment id) routes on_off to WholeHouse, not segment cleaning.
+func TestDeviceParentOnOffWholeHouse(t *testing.T) {
+	cap := &capture{}
+	g := NewVacuumGroup("Clean", "Op", "HOME", 20*time.Millisecond)
+	g.SetPublisher(cap.publish)
+	d := New(config.Device{ID: "P", Type: "devices.types.vacuum_cleaner",
+		Capabilities: []config.Capability{{Type: "devices.capabilities.on_off"}}}, nil, nil)
+	d.SetVacuumGroup(g, "") // whole-house
+
+	d.SetCapabilityState(true, "devices.capabilities.on_off", "on", false)
+	if m, _ := cap.last(); m[0] != "Op" || m[1] != "START" {
+		t.Fatalf("parent on -> %v", m)
+	}
+	d.SetCapabilityState(false, "devices.capabilities.on_off", "on", false)
+	if m, _ := cap.last(); m[1] != "HOME" {
+		t.Fatalf("parent off -> %v", m)
+	}
+}
+
+// on_off state is read from the robot Status item: cleaning-family -> on, else off.
+func TestVacuumOnOffStateFromStatus(t *testing.T) {
+	d := New(config.Device{ID: "P", Type: "devices.types.vacuum_cleaner", Transport: "openhab",
+		Capabilities: []config.Capability{{Type: "devices.capabilities.on_off", Retrievable: true}},
+		OpenHAB:      []config.OpenHABBinding{{Kind: "cap", Instance: "on", Item: "Status"}},
+		ValueMapping: []config.ValueMapping{{Type: "on_off", Mapping: []config.InstanceMapping{
+			{Instance: "on", Mapping: [][]any{{true, true, true}, {"cleaning", "moving", "paused"}}},
+		}}},
+	}, nil, nil)
+
+	onState := func() bool {
+		for _, c := range d.QueryState().Capabilities {
+			if c.State.Instance == "on" {
+				b, _ := c.State.Value.(bool)
+				return b
+			}
+		}
+		return false
+	}
+	d.UpdateFromMQTT("cleaning", "on", false)
+	if !onState() {
+		t.Fatal("cleaning should read as on")
+	}
+	d.UpdateFromMQTT("docked", "on", false)
+	if onState() {
+		t.Fatal("docked should read as off")
+	}
+}
+
 // A vacuum-zone device routes on_off to the group instead of publishing.
 func TestDeviceZoneOnOffRoutesToGroup(t *testing.T) {
 	cap := &capture{}

@@ -241,7 +241,11 @@ func (d *Device) SetCapabilityState(val any, capType, instance string, relative 
 		if c := d.findCap(capType, instance); c != nil {
 			c.cur = &State{Instance: instance, Value: on}
 		}
-		d.vacuum.SetRoom(d.segmentID, on)
+		if d.segmentID == "" {
+			d.vacuum.WholeHouse(on) // parent: START / home
+		} else {
+			d.vacuum.SetRoom(d.segmentID, on) // zone: segment aggregation
+		}
 		return ActionCapResult{
 			Type:  capType,
 			State: ActionState{Instance: instance, ActionResult: ActionResult{Status: "DONE"}},

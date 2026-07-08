@@ -11,6 +11,10 @@ import (
 // before dispatching the combined segment-clean command.
 const defaultVacuumDebounce = 3 * time.Second
 
+// wholeHouseStart is the Operation command a whole-house on_off sends to start a
+// full clean (its off sends the group's home command).
+const wholeHouseStart = "START"
+
 // VacuumGroup batches per-room on/off actions for one robot into a single
 // segment-cleaning command. It exists because Yandex sends each room's on_off
 // independently, while the robot wants one segment list: turning rooms on
@@ -52,6 +56,26 @@ func (g *VacuumGroup) SetPublisher(p PublishFunc) {
 	g.mu.Lock()
 	g.publish = p
 	g.mu.Unlock()
+}
+
+// WholeHouse handles the parent (whole-house) device's on_off: ON starts a full
+// clean (START), OFF returns to base (home). It clears any pending per-room
+// batch so a stray segment dispatch can't override it.
+func (g *VacuumGroup) WholeHouse(on bool) {
+	g.mu.Lock()
+	g.stopTimer()
+	g.active = map[string]bool{}
+	g.cleaning = on
+	pub, op, home := g.publish, g.opTarget, g.homeCmd
+	g.mu.Unlock()
+	if pub == nil || op == "" {
+		return
+	}
+	if on {
+		pub(op, wholeHouseStart)
+	} else {
+		pub(op, home)
+	}
 }
 
 // SetRoom records a room's on/off. Turning on accumulates its segment and

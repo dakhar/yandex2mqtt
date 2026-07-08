@@ -22,6 +22,7 @@ func TestInferVacuums(t *testing.T) {
 		{Name: "VacuumCleaner_Battery_Level", Type: "Number", Tags: []string{"Measurement", "StateOfCharge"}, GroupNames: gm("VacuumCleaner_Battery")},
 		// Segment aggregation group (Group:Switch) must NOT add a parent on_off.
 		{Name: "gVacuum_Segments", Type: "Group", GroupType: "Switch", GroupNames: gm("VacuumCleaner")},
+		{Name: "VacuumCleaner_Status", Type: "String", Tags: []string{"Status"}, GroupNames: gm("VacuumCleaner")},
 	}
 	setups := inferVacuums(items)
 	if len(setups) != 1 {
@@ -65,6 +66,19 @@ func TestInferVacuums(t *testing.T) {
 	}
 	if !battery {
 		t.Fatalf("parent missing battery_level: %+v", s.Parent.Properties)
+	}
+	// on_off state comes from the Status item (command is group-routed).
+	if s.StatusItem != "VacuumCleaner_Status" {
+		t.Fatalf("StatusItem = %q", s.StatusItem)
+	}
+	onState := ""
+	for _, b := range s.Parent.OpenHAB {
+		if b.Kind == "cap" && b.Instance == "on" {
+			onState = b.Item
+		}
+	}
+	if onState != "VacuumCleaner_Status" {
+		t.Fatalf("on_off state should bind to Status, got %q", onState)
 	}
 	// The parent's room comes from its openHAB Location ancestor.
 	if s.Parent.Room != "Дом" {

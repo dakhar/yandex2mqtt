@@ -27,9 +27,14 @@ type VacuumSetup struct {
 	Name        string          // parent label
 	CleanTarget string          // Cleansegments item (segment_ids command)
 	OpTarget    string          // Operation item (START/STOP/PAUSE/HOME)
+	StatusItem  string          // Status item (docked/cleaning/... ) for on_off state
 	Parent      config.Device   // parent composite draft (caller sets Room)
 	Segments    []VacuumSegment // segment id + name, ordered by numeric id
 }
+
+// vacuumCleaningStatuses are the robot Status values that mean "cleaning" (on_off
+// state = on); any other value (docked/idle/returning/...) reads as off.
+var vacuumCleaningStatuses = []any{"cleaning", "moving", "paused"}
 
 // VacuumSegment is one map segment reported by the robot.
 type VacuumSegment struct {
@@ -73,7 +78,7 @@ func inferVacuums(items []ohItem) []VacuumSetup {
 		if it.Type != "Group" || equipmentType(it.Tags) != "devices.types.vacuum_cleaner" {
 			continue
 		}
-		var mapItem, cleanItem, opItem string
+		var mapItem, cleanItem, opItem, statusItem string
 		for _, m := range children[it.Name] {
 			switch {
 			case strings.HasSuffix(m.Name, "Mapsegments"):
@@ -82,6 +87,8 @@ func inferVacuums(items []ohItem) []VacuumSetup {
 				cleanItem = m.Name
 			case strings.HasSuffix(m.Name, "Operation") && !strings.HasSuffix(m.Name, "Operation_Mode"):
 				opItem = m.Name
+			case strings.HasSuffix(m.Name, "Status"): // not Statusdetail/Batterystatus
+				statusItem = m.Name
 			}
 		}
 		if mapItem == "" || cleanItem == "" {
@@ -118,12 +125,10 @@ func inferVacuums(items []ohItem) []VacuumSetup {
 		parent, _ := draftForGroup(it, parentMembers)
 		parent.Type = "devices.types.vacuum_cleaner"
 		parent.Room = resolveRoom(it, byName, locName) // its Location ancestor
-		if opItem != "" {
-			addWholeHouseControls(&parent, opItem)
-		}
+		addWholeHouseControls(&parent, opItem, statusItem)
 		out = append(out, VacuumSetup{
 			Item: it.Name, Name: itemLabel(it),
-			CleanTarget: cleanItem, OpTarget: opItem,
+			CleanTarget: cleanItem, OpTarget: opItem, StatusItem: statusItem,
 			Parent: parent, Segments: segs,
 		})
 	}
@@ -155,25 +160,40 @@ func parseSegments(state string) []VacuumSegment {
 	return segs
 }
 
-// addWholeHouseControls gives the parent an on_off (START/HOME) and a pause
-// toggle (PAUSE/START), both bound to the Operation item via value mappings.
-func addWholeHouseControls(d *config.Device, opItem string) {
+// addWholeHouseControls gives the parent a whole-house on_off and a pause toggle.
+// on_off command is routed to the VacuumGroup (START/home on Operation), so its
+// state is free to come from the robot Status (cleaning/moving/paused = on) via
+// a value mapping — hence retrievable only when a Status item exists. Pause is a
+// plain command to the Operation item.
+func addWholeHouseControls(d *config.Device, opItem, statusItem string) {
 	d.Capabilities = append(d.Capabilities,
-		config.Capability{Type: "devices.capabilities.on_off", Retrievable: false, Reportable: false,
-			Parameters: map[string]any{}},
+		config.Capability{Type: "devices.capabilities.on_off",
+			Retrievable: statusItem != "", Reportable: statusItem != "", Parameters: map[string]any{}},
 		config.Capability{Type: "devices.capabilities.toggle", Retrievable: false, Reportable: false,
 			Parameters: map[string]any{"instance": "pause"}},
 	)
-	d.OpenHAB = append(d.OpenHAB,
-		config.OpenHABBinding{Kind: "cap", Instance: "on", Item: opItem},
-		config.OpenHABBinding{Kind: "cap", Instance: "pause", Item: opItem},
-	)
-	d.ValueMapping = append(d.ValueMapping,
-		config.ValueMapping{Type: "on_off", Mapping: []config.InstanceMapping{
-			{Instance: "on", Mapping: [][]any{{true, false}, {"START", "HOME"}}},
-		}},
-		config.ValueMapping{Type: "toggle", Mapping: []config.InstanceMapping{
-			{Instance: "pause", Mapping: [][]any{{true, false}, {"PAUSE", "START"}}},
-		}},
-	)
+	if statusItem != "" {
+		// on_off state from Status; command is handled by the group, not this item.
+		d.OpenHAB = append(d.OpenHAB, config.OpenHABBinding{Kind: "cap", Instance: "on", Item: statusItem})
+		d.ValueMapping = append(d.ValueMapping, OnOffStatusMapping())
+	}
+	if opItem != "" {
+		d.OpenHAB = append(d.OpenHAB, config.OpenHABBinding{Kind: "cap", Instance: "pause", Item: opItem})
+		d.ValueMapping = append(d.ValueMapping,
+			config.ValueMapping{Type: "toggle", Mapping: []config.InstanceMapping{
+				{Instance: "pause", Mapping: [][]any{{true, false}, {"PAUSE", "START"}}},
+			}})
+	}
+}
+
+// OnOffStatusMapping maps robot Status values to the on_off state: the cleaning
+// statuses read as on; anything else falls through to off.
+func OnOffStatusMapping() config.ValueMapping {
+	on := make([]any, len(vacuumCleaningStatuses))
+	for i := range vacuumCleaningStatuses {
+		on[i] = true
+	}
+	return config.ValueMapping{Type: "on_off", Mapping: []config.InstanceMapping{
+		{Instance: "on", Mapping: [][]any{on, vacuumCleaningStatuses}},
+	}}
 }

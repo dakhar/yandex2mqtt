@@ -103,30 +103,41 @@ func (h *Handlers) CreateVacuum(w http.ResponseWriter, r *http.Request) {
 
 	var toSave []config.Device
 	// Parent (whole-house). Its room is the equipment's openHAB Location ancestor
-	// (set during inference); empty = unassigned.
+	// (set during inference); empty = unassigned. SegmentID "" marks it whole-house
+	// so its on_off routes to the group as START/home.
 	parent := setup.Parent
 	parent.ID = parentID
 	parent.AllowedUsers = []string{u.ID}
+	parent.Vacuum = &config.VacuumZone{
+		GroupID: item, SegmentID: "",
+		CleanTarget: setup.CleanTarget, OpTarget: setup.OpTarget, HomeCmd: "HOME",
+	}
 	toSave = append(toSave, parent)
 
-	// One zone device per segment that got a room.
+	// One zone device per segment that got a room. on_off command is routed to the
+	// shared VacuumGroup (segment aggregation); its state mirrors the robot Status.
 	for _, seg := range setup.Segments {
 		room := strings.TrimSpace(r.PostFormValue("room_" + seg.ID))
 		if room == "" {
 			continue
 		}
-		toSave = append(toSave, config.Device{
+		zone := config.Device{
 			ID: vacuumID(item, seg.ID), Name: "Пылесос", Type: "devices.types.vacuum_cleaner",
 			Transport: "openhab", Room: room, AllowedUsers: []string{u.ID},
-			Capabilities: []config.Capability{{Type: "devices.capabilities.on_off"}},
-			// The identity binding (skipped in wiring) keeps each zone distinct; on_off
-			// is routed to the shared VacuumGroup, not this item.
+			Capabilities: []config.Capability{{Type: "devices.capabilities.on_off",
+				Retrievable: setup.StatusItem != "", Reportable: setup.StatusItem != ""}},
+			// The identity binding (skipped in wiring) keeps each zone distinct.
 			OpenHAB: []config.OpenHABBinding{{Kind: "equipment", Item: item + "#" + seg.ID}},
 			Vacuum: &config.VacuumZone{
 				GroupID: item, SegmentID: seg.ID,
 				CleanTarget: setup.CleanTarget, OpTarget: setup.OpTarget, HomeCmd: "HOME",
 			},
-		})
+		}
+		if setup.StatusItem != "" {
+			zone.OpenHAB = append(zone.OpenHAB, config.OpenHABBinding{Kind: "cap", Instance: "on", Item: setup.StatusItem})
+			zone.ValueMapping = []config.ValueMapping{openhab.OnOffStatusMapping()}
+		}
+		toSave = append(toSave, zone)
 	}
 
 	if errs, _ := device.ValidateCatalog(toSave); len(errs) > 0 {
