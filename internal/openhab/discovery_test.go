@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/dakhar/yandex2mqtt/internal/config"
@@ -83,6 +84,67 @@ func TestCameraHLSInference(t *testing.T) {
 	// The JPG snapshot sibling is not a video_stream.
 	if _, ok := draftForItem(ohItem{Name: "CamDoorImageUrl", Type: "String"}); ok {
 		t.Fatal("Cam*ImageUrl must not be inferred as a camera")
+	}
+}
+
+// A camera can be one capability of a larger equipment (a vacuum with a camera,
+// a doorbell with a camera): the HLS point contributes a video_stream to the
+// composite device, whose type stays the equipment's.
+func TestCameraComposedIntoEquipment(t *testing.T) {
+	cases := []struct {
+		name    string
+		group   ohItem
+		members []ohItem
+		want    string
+	}{
+		{
+			name:  "vacuum with camera",
+			group: ohItem{Name: "e_Vacuum", Type: "Group", Label: "Робот-пылесос", Tags: []string{"CleaningRobot"}},
+			members: []ohItem{
+				{Name: "Vac_Power", Type: "Switch", Tags: []string{"Power", "Control"}},
+				{Name: "Vac_HlsUrl", Type: "String"},
+			},
+			want: "devices.types.vacuum_cleaner",
+		},
+		{
+			name:  "doorbell with camera",
+			group: ohItem{Name: "e_Doorbell", Type: "Group", Label: "Дверной звонок", Tags: []string{"Doorbell"}},
+			members: []ohItem{
+				{Name: "Door_HlsUrl", Type: "String"},
+				{Name: "Door_Motion", Type: "Switch", Tags: []string{"Motion"}},
+			},
+			want: "devices.types.camera",
+		},
+	}
+	for _, tc := range cases {
+		d, ok := draftForGroup(tc.group, tc.members)
+		if !ok {
+			t.Fatalf("%s: not drafted", tc.name)
+		}
+		if d.Type != tc.want {
+			t.Fatalf("%s: type=%q, want %q", tc.name, d.Type, tc.want)
+		}
+		hasStream := false
+		for _, c := range d.Capabilities {
+			if c.Type == "devices.capabilities.video_stream" {
+				hasStream = true
+			}
+		}
+		if !hasStream {
+			t.Fatalf("%s: composite has no video_stream: %+v", tc.name, d.Capabilities)
+		}
+		streamBound := false
+		for _, b := range d.OpenHAB {
+			if b.Instance == device.StreamInstance && strings.HasSuffix(strings.ToLower(b.Item), "hlsurl") {
+				streamBound = true
+			}
+		}
+		if !streamBound {
+			t.Fatalf("%s: no get_stream binding to the HLS item: %+v", tc.name, d.OpenHAB)
+		}
+		if errs, _ := device.ValidateCatalog([]config.Device{d}); len(errs) > 0 {
+			t.Fatalf("%s: draft invalid: %v", tc.name, errs)
+		}
 	}
 }
 
