@@ -493,13 +493,11 @@ func isOffValue(v string) bool {
 }
 
 // stringSpeed builds a speed mode capability from a String item's enumerated
-// options, mapped positionally onto the instance's intensity ladder (off-like
-// values dropped — power is the on_off). The value mapping translates the
-// device's own tokens.
+// options (off-like values dropped — power is the on_off), mapped onto the
+// instance's intensity ladder with a value mapping of the device's own tokens.
 func stringSpeed(it ohItem) feature {
 	inst := speedInstance(it.Name)
-	ladder := speedLadder(inst)
-	var opts []string
+	var opts []any
 	if it.StateDesc != nil {
 		for _, o := range it.StateDesc.Options {
 			if !isOffValue(o.Value) {
@@ -507,16 +505,10 @@ func stringSpeed(it ohItem) feature {
 			}
 		}
 	}
-	if len(opts) == 0 || len(opts) > len(ladder) {
+	if len(opts) == 0 {
 		return capFeat(inst, capMode(inst, device.RecommendedModes(inst)), it.Name)
 	}
-	var modes []string
-	var mapY, mapO []any
-	for i, dev := range opts {
-		modes = append(modes, ladder[i])
-		mapY = append(mapY, ladder[i])
-		mapO = append(mapO, dev)
-	}
+	modes, mapY, mapO := ladderMapping(opts, speedLadder(inst))
 	f := capFeat(inst, capMode(inst, modes), it.Name)
 	f.mapY, f.mapO = mapY, mapO
 	return f
@@ -537,9 +529,8 @@ func speedFeature(it ohItem) feature {
 // With no usable range it falls back to the recommended modes and no mapping.
 func speedModes(sd *ohStateDesc, inst string) (modes []string, mapY, mapO []any) {
 	ladder := speedLadder(inst)
-	fallback := func() ([]string, []any, []any) { return device.RecommendedModes(inst), nil, nil }
 	if sd == nil || sd.Minimum == nil || sd.Maximum == nil {
-		return fallback()
+		return device.RecommendedModes(inst), nil, nil
 	}
 	step := 1.0
 	if sd.Step != nil && *sd.Step > 0 {
@@ -549,17 +540,39 @@ func speedModes(sd *ohStateDesc, inst string) (modes []string, mapY, mapO []any)
 	if min == 0 {
 		min = step // 0 == off, controlled via on_off
 	}
-	var values []float64
+	var values []any
 	for v := min; v <= *sd.Maximum+1e-9; v += step {
-		values = append(values, v)
+		values = append(values, numClean(v))
 	}
-	if len(values) < 1 || len(values) > len(ladder) {
-		return fallback()
+	if len(values) < 1 {
+		return device.RecommendedModes(inst), nil, nil
 	}
-	for i, v := range values {
-		modes = append(modes, ladder[i])
-		mapY = append(mapY, ladder[i])
-		mapO = append(mapO, numClean(v))
+	return ladderMapping(values, ladder)
+}
+
+// ladderMapping assigns each device value a mode from the intensity ladder and
+// builds the value mapping. When there are more device values than ladder rungs,
+// values are distributed across the ladder (collapsing neighbours) rather than
+// dropped — so a >4-preset fan_speed keeps a full mapping instead of falling
+// back. modes are the distinct ladder tokens used, in order.
+func ladderMapping(devValues []any, ladder []string) (modes []string, mapY, mapO []any) {
+	n := len(devValues)
+	seen := map[string]bool{}
+	for i, dev := range devValues {
+		idx := i
+		if n > len(ladder) {
+			idx = i * len(ladder) / n // spread N values across the ladder
+		}
+		if idx >= len(ladder) {
+			idx = len(ladder) - 1
+		}
+		tok := ladder[idx]
+		if !seen[tok] {
+			seen[tok] = true
+			modes = append(modes, tok)
+		}
+		mapY = append(mapY, tok)
+		mapO = append(mapO, dev)
 	}
 	return modes, mapY, mapO
 }

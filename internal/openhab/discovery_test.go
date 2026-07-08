@@ -374,6 +374,37 @@ func TestSpeedInstanceByName(t *testing.T) {
 	}
 }
 
+// A fan_speed with more presets than the 4-rung ladder keeps a full value
+// mapping (presets distributed/collapsed) instead of falling back to recommended
+// modes with no mapping.
+func TestSpeedManyPresetsKeepMapping(t *testing.T) {
+	// off + 6 presets; "fan" in name -> fan_speed (ladder low/medium/high/turbo).
+	it := ohItem{Name: "CeilingFan_Speed", Type: "String", Tags: []string{"Setpoint", "Speed"},
+		StateDesc: &ohStateDesc{Options: []ohOption{
+			{Value: "off"}, {Value: "min"}, {Value: "low"}, {Value: "medium"},
+			{Value: "high"}, {Value: "max"}, {Value: "turbo"},
+		}}}
+	d, ok := draftForItem(it)
+	if !ok || d.Capabilities[0].Parameters["instance"] != "fan_speed" {
+		t.Fatalf("ok=%v cap=%+v", ok, d.Capabilities[0].Parameters)
+	}
+	if len(d.ValueMapping) != 1 {
+		t.Fatalf("expected a value mapping, got %+v", d.ValueMapping)
+	}
+	im := d.ValueMapping[0].Mapping[0]
+	// All 6 non-off presets mapped (none dropped), onto <=4 distinct modes.
+	if len(im.Mapping[1]) != 6 {
+		t.Fatalf("device values mapped = %d, want 6: %+v", len(im.Mapping[1]), im.Mapping)
+	}
+	modes, _ := d.Capabilities[0].Parameters["modes"].([]any)
+	if len(modes) == 0 || len(modes) > 4 {
+		t.Fatalf("modes = %v, want 1..4 distinct", modes)
+	}
+	if errs, _ := device.ValidateCatalog([]config.Device{d}); len(errs) > 0 {
+		t.Fatalf("draft invalid: %v", errs)
+	}
+}
+
 func TestGroupPointAggregation(t *testing.T) {
 	// A light whose points are aggregation Groups (Group:Switch/Dimmer) mapped by
 	// groupType; the Point-groups must not become their own devices.
