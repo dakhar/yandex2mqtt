@@ -17,10 +17,17 @@ func ValidateCatalog(devs []config.Device) (errs, warns []error) {
 		if !deviceTypes.has(d.Type) {
 			warns = append(warns, fmt.Errorf("%s: unknown device type %q", where, d.Type))
 		}
+		colorCount := 0
 		for _, c := range d.Capabilities {
+			if actTypeOf(c.Type) == "color_setting" {
+				colorCount++
+			}
 			e, w := validateCapability(where, c)
 			errs = append(errs, e...)
 			warns = append(warns, w...)
+		}
+		if colorCount > 1 {
+			warns = append(warns, fmt.Errorf("%s: %d color_setting capabilities; Yandex allows one (merge hsv/temperature_k into a single capability)", where, colorCount))
 		}
 		for _, p := range d.Properties {
 			e, w := validateProperty(where, p)

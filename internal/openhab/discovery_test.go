@@ -250,6 +250,44 @@ func TestGroupPointAggregation(t *testing.T) {
 	}
 }
 
+func TestColorSettingMerge(t *testing.T) {
+	// hsv (from a Color point) and temperature_k (from a ColorTemperature Dimmer)
+	// must merge into ONE color_setting capability with per-instance bindings.
+	g := ohItem{Name: "e_Light", Type: "Group", Label: "Свет", Tags: []string{"Lightbulb"}}
+	members := []ohItem{
+		{Name: "Col", Type: "Color", Tags: []string{"Color"}},
+		{Name: "Wt", Type: "Dimmer", Tags: []string{"Setpoint", "ColorTemperature"}},
+	}
+	d, ok := draftForGroup(g, members)
+	if !ok {
+		t.Fatal("not inferred")
+	}
+	n := 0
+	var cs config.Capability
+	for _, c := range d.Capabilities {
+		if c.Type == "devices.capabilities.color_setting" {
+			n++
+			cs = c
+		}
+	}
+	if n != 1 {
+		t.Fatalf("color_setting caps = %d, want 1", n)
+	}
+	if cs.Parameters["color_model"] != "hsv" || cs.Parameters["temperature_k"] == nil {
+		t.Fatalf("merged params missing color_model/temperature_k: %+v", cs.Parameters)
+	}
+	byInst := map[string]string{}
+	for _, b := range d.OpenHAB {
+		byInst[b.Instance] = b.Item
+	}
+	if byInst["hsv"] != "Col" || byInst["temperature_k"] != "Wt" {
+		t.Fatalf("bindings wrong: %+v", byInst)
+	}
+	if errs, _ := device.ValidateCatalog([]config.Device{d}); len(errs) > 0 {
+		t.Fatalf("merged draft invalid: %v", errs)
+	}
+}
+
 func TestKitchenHoodInference(t *testing.T) {
 	g := ohItem{Name: "e_Hood", Type: "Group", Label: "Вытяжка", Tags: []string{"KitchenHood"}}
 	members := []ohItem{

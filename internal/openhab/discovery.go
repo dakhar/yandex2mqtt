@@ -324,6 +324,31 @@ func assemble(name, deviceType string, feats []feature) config.Device {
 		if f.kind == "prop" {
 			d.Properties = append(d.Properties, f.prop)
 			d.OpenHAB = append(d.OpenHAB, config.OpenHABBinding{Kind: "prop", Instance: f.instance, Item: f.item})
+		} else if f.cap.Type == "devices.capabilities.color_setting" {
+			// Yandex allows only one color_setting: merge params (color_model +
+			// temperature_k + scene) into a single capability, but keep each
+			// instance's binding so hsv/temperature_k route to their own items.
+			ci := -1
+			for i := range d.Capabilities {
+				if d.Capabilities[i].Type == "devices.capabilities.color_setting" {
+					ci = i
+					break
+				}
+			}
+			if ci < 0 {
+				merged := map[string]any{}
+				for k, v := range f.cap.Parameters {
+					merged[k] = v
+				}
+				cp := f.cap
+				cp.Parameters = merged
+				d.Capabilities = append(d.Capabilities, cp)
+			} else {
+				for k, v := range f.cap.Parameters {
+					d.Capabilities[ci].Parameters[k] = v
+				}
+			}
+			d.OpenHAB = append(d.OpenHAB, config.OpenHABBinding{Kind: "cap", Instance: f.instance, Item: f.item})
 		} else {
 			d.Capabilities = append(d.Capabilities, f.cap)
 			d.OpenHAB = append(d.OpenHAB, config.OpenHABBinding{Kind: "cap", Instance: f.instance, Item: f.item})
