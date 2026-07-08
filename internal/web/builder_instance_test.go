@@ -82,3 +82,59 @@ func TestToInputColorTempOpenHAB(t *testing.T) {
 		t.Fatalf("item = %q, want Light_Alex_Highlight_Wtemp", c.Item)
 	}
 }
+
+// A merged color_setting (hsv + temperature_k, two bindings) must round-trip
+// through the builder: toInput splits it into one editable row per instance,
+// and buildDevice merges them back into one capability keeping both bindings.
+// Regression: e_Lights_Balcony_Aux previously surfaced only temperature_k.
+func TestColorSettingSplitMergeRoundTrip(t *testing.T) {
+	d := config.Device{
+		Transport: "openhab", Type: "devices.types.light",
+		Capabilities: []config.Capability{
+			{Type: "devices.capabilities.on_off", Retrievable: true},
+			{Type: "devices.capabilities.color_setting", Retrievable: true,
+				Parameters: map[string]any{"color_model": "hsv", "temperature_k": map[string]any{"min": 2700, "max": 6500}}},
+		},
+		OpenHAB: []config.OpenHABBinding{
+			{Kind: "cap", Instance: "on", Item: "Sw"},
+			{Kind: "cap", Instance: "hsv", Item: "ColorItem"},
+			{Kind: "cap", Instance: "temperature_k", Item: "WtempItem"},
+		},
+	}
+
+	in := toInput(d, "")
+	// on_off + hsv + temperature_k = 3 editable rows.
+	byInst := map[string]capInput{}
+	for _, c := range in.Capabilities {
+		byInst[c.Instance] = c
+	}
+	if len(in.Capabilities) != 3 {
+		t.Fatalf("rows = %d, want 3: %+v", len(in.Capabilities), in.Capabilities)
+	}
+	if byInst["hsv"].Item != "ColorItem" || byInst["temperature_k"].Item != "WtempItem" {
+		t.Fatalf("bindings not split: hsv=%q temp=%q", byInst["hsv"].Item, byInst["temperature_k"].Item)
+	}
+
+	back := buildDevice("u1", "id1", in)
+	var color *config.Capability
+	n := 0
+	for i := range back.Capabilities {
+		if back.Capabilities[i].Type == "devices.capabilities.color_setting" {
+			color = &back.Capabilities[i]
+			n++
+		}
+	}
+	if n != 1 || color == nil {
+		t.Fatalf("expected exactly one color_setting, got %d", n)
+	}
+	if color.Parameters["color_model"] != "hsv" || !hasKey(color.Parameters, "temperature_k") {
+		t.Fatalf("merged params lost an instance: %+v", color.Parameters)
+	}
+	oh := map[string]string{}
+	for _, b := range back.OpenHAB {
+		oh[b.Instance] = b.Item
+	}
+	if oh["hsv"] != "ColorItem" || oh["temperature_k"] != "WtempItem" {
+		t.Fatalf("merged device lost a binding: %+v", back.OpenHAB)
+	}
+}

@@ -225,10 +225,31 @@ func buildDevice(userID, id string, in deviceInput) config.Device {
 			d.ValueMapping = append(d.ValueMapping, config.ValueMapping{Type: at, Mapping: []config.InstanceMapping{im}})
 		}
 	}
+	// Yandex allows only one color_setting per device: merge the builder's
+	// per-instance color rows (hsv/temperature_k/scene) into a single capability
+	// with combined params, while keeping each instance's own binding.
+	colorIdx := -1
 	for _, c := range in.Capabilities {
-		d.Capabilities = append(d.Capabilities, config.Capability{
-			Type: c.Type, Retrievable: c.Retrievable, Reportable: c.Reportable, Parameters: c.Params, Invert: c.Invert,
-		})
+		if actType(c.Type) == "color_setting" {
+			if colorIdx < 0 {
+				merged := map[string]any{}
+				for k, v := range c.Params {
+					merged[k] = v
+				}
+				d.Capabilities = append(d.Capabilities, config.Capability{
+					Type: c.Type, Retrievable: c.Retrievable, Reportable: c.Reportable, Parameters: merged,
+				})
+				colorIdx = len(d.Capabilities) - 1
+			} else {
+				for k, v := range c.Params {
+					d.Capabilities[colorIdx].Parameters[k] = v
+				}
+			}
+		} else {
+			d.Capabilities = append(d.Capabilities, config.Capability{
+				Type: c.Type, Retrievable: c.Retrievable, Reportable: c.Reportable, Parameters: c.Params, Invert: c.Invert,
+			})
+		}
 		if openhab {
 			if c.Item != "" {
 				d.OpenHAB = append(d.OpenHAB, config.OpenHABBinding{Kind: "cap", Instance: c.Instance, Item: c.Item})
@@ -345,12 +366,13 @@ func toInput(d config.Device, roomID string) deviceInput {
 			itemByKey[b.Kind+"|"+b.Instance] = b.Item
 		}
 		for _, c := range d.Capabilities {
-			inst := capInstance(c)
-			in.Capabilities = append(in.Capabilities, capInput{
-				Type: c.Type, Instance: inst, Retrievable: c.Retrievable, Reportable: c.Reportable,
-				Params: c.Parameters, Item: itemByKey["cap|"+inst], Invert: c.Invert,
-				Mapping: mappings[actType(c.Type)+"|"+inst],
-			})
+			for _, r := range capRows(c) {
+				in.Capabilities = append(in.Capabilities, capInput{
+					Type: c.Type, Instance: r.inst, Retrievable: c.Retrievable, Reportable: c.Reportable,
+					Params: r.params, Item: itemByKey["cap|"+r.inst], Invert: c.Invert,
+					Mapping: mappings[actType(c.Type)+"|"+r.inst],
+				})
+			}
 		}
 		for _, p := range d.Properties {
 			inst, _ := p.Parameters["instance"].(string)
@@ -364,13 +386,14 @@ func toInput(d config.Device, roomID string) deviceInput {
 	}
 
 	for _, c := range d.Capabilities {
-		inst := capInstance(c)
-		t := setByInst[inst]
-		in.Capabilities = append(in.Capabilities, capInput{
-			Type: c.Type, Instance: inst, Retrievable: c.Retrievable, Reportable: c.Reportable,
-			Params: c.Parameters, Set: t.Set, State: t.State, StatePath: t.StatePath, Invert: c.Invert,
-			Mapping: mappings[actType(c.Type)+"|"+inst],
-		})
+		for _, r := range capRows(c) {
+			t := setByInst[r.inst]
+			in.Capabilities = append(in.Capabilities, capInput{
+				Type: c.Type, Instance: r.inst, Retrievable: c.Retrievable, Reportable: c.Reportable,
+				Params: r.params, Set: t.Set, State: t.State, StatePath: t.StatePath, Invert: c.Invert,
+				Mapping: mappings[actType(c.Type)+"|"+r.inst],
+			})
+		}
 	}
 	for _, p := range d.Properties {
 		inst, _ := p.Parameters["instance"].(string)
@@ -397,6 +420,26 @@ func capInstance(c config.Capability) string {
 	return defaultInstance(c.Type)
 }
 
+// capRow is one editable builder row (instance + its params) derived from a
+// stored capability. A merged color_setting expands to one row per sub-instance
+// (hsv/temperature_k/scene) so each stays visible and editable.
+type capRow struct {
+	inst   string
+	params map[string]any
+}
+
+func capRows(c config.Capability) []capRow {
+	if actType(c.Type) == "color_setting" {
+		subs := colorSubInstances(c.Parameters)
+		rows := make([]capRow, 0, len(subs))
+		for _, s := range subs {
+			rows = append(rows, capRow{inst: s, params: colorSubParams(c.Parameters, s)})
+		}
+		return rows
+	}
+	return []capRow{{inst: capInstance(c), params: c.Parameters}}
+}
+
 // colorInstance derives a color_setting capability's instance from its params.
 func colorInstance(p map[string]any) string {
 	switch {
@@ -409,6 +452,54 @@ func colorInstance(p map[string]any) string {
 	default:
 		return "hsv" // color_model hsv or unspecified
 	}
+}
+
+// colorSubInstances lists the sub-instances present in a (possibly merged)
+// color_setting capability's params — Yandex allows one color_setting to carry
+// several (color_model + temperature_k + scene). Used to split a merged
+// capability back into one editable builder row per instance.
+func colorSubInstances(p map[string]any) []string {
+	var out []string
+	switch {
+	case p["color_model"] == "rgb", hasKey(p, "rgb"):
+		out = append(out, "rgb")
+	case p["color_model"] == "hsv":
+		out = append(out, "hsv")
+	}
+	if hasKey(p, "temperature_k") {
+		out = append(out, "temperature_k")
+	}
+	if hasKey(p, "color_scene") || hasKey(p, "scene") {
+		out = append(out, "scene")
+	}
+	if len(out) == 0 {
+		out = append(out, "hsv")
+	}
+	return out
+}
+
+// colorSubParams returns just the params belonging to one color_setting instance.
+func colorSubParams(p map[string]any, inst string) map[string]any {
+	m := map[string]any{}
+	switch inst {
+	case "hsv":
+		m["color_model"] = "hsv"
+	case "rgb":
+		if hasKey(p, "rgb") {
+			m["rgb"] = p["rgb"]
+		} else {
+			m["color_model"] = "rgb"
+		}
+	case "temperature_k":
+		m["temperature_k"] = p["temperature_k"]
+	case "scene":
+		if hasKey(p, "color_scene") {
+			m["color_scene"] = p["color_scene"]
+		} else if hasKey(p, "scene") {
+			m["scene"] = p["scene"]
+		}
+	}
+	return m
 }
 
 func hasKey(m map[string]any, k string) bool { _, ok := m[k]; return ok }
