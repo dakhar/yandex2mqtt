@@ -15,6 +15,7 @@
         <button type="submit">Применить</button>
       </form>
       <a href="/app/discover/ignored" class="ghost ign-link">Игнорируемые</a>
+      <a href="/app/discover/vacuum" class="ghost ign-link">Робот-пылесос</a>
       <form method="post" action="/app/discover/mode" class="modeform" title="Режим дискаверинга">
         <button type="submit" name="mode" value="semantic" class="modebtn{{if not .Flat}} active{{end}}">Семантика</button><button type="submit" name="mode" value="flat" class="modebtn{{if .Flat}} active{{end}}">Плоско</button>
       </form>

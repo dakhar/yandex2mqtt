@@ -1,0 +1,63 @@
+{{define "content"}}
+<div class="topbar">
+  <span class="brand">yandex2mqtt · робот-пылесос</span>
+  <span>
+    <a href="/app/discover">← к импорту</a>
+    <a href="/app">доска</a>
+    <a href="/logout">выйти</a>
+  </span>
+</div>
+
+<div class="wrap">
+  {{if .Done}}<div class="ok">Устройства созданы. Проверь на <a href="/app">доске</a>.</div>{{end}}
+  {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+
+  <p class="muted">Каждый сегмент карты робота — отдельное устройство в своей комнате: включение запускает уборку этой комнаты, а команды объединяются в один запуск. Родитель («вся квартира» + камера) создаётся в комнате «Дом». Пустая комната = сегмент не создаём.</p>
+
+  {{if not .Setups}}
+    <p class="muted">Роботы-пылесосы с сегментами не найдены. Нужен CleaningRobot с items <code>*Mapsegments</code> и <code>*Cleansegments</code>.</p>
+  {{end}}
+
+  {{range .Setups}}
+  <form method="post" action="/app/discover/vacuum" class="vac">
+    <input type="hidden" name="item" value="{{.Item}}">
+    <h2>{{.Name}} <span class="muted">({{.Item}})</span></h2>
+    <table class="users">
+      <thead><tr><th>Сегмент</th><th>Комната</th></tr></thead>
+      <tbody>
+      {{$rooms := $.Rooms}}
+      {{range .Segments}}
+        <tr>
+          <td>{{.Name}} <span class="muted">#{{.ID}}</span></td>
+          <td>
+            <select name="room_{{.ID}}">
+              <option value="">— не создавать —</option>
+              {{range $rooms}}<option value="{{.Name}}">{{.Name}}</option>{{end}}
+            </select>
+          </td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    <button type="submit" class="primary">Создать пылесос и зоны</button>
+  </form>
+  {{end}}
+
+  <p class="muted small">Совет: заранее заведи комнаты на <a href="/app">доске</a> — они появятся в списке. Название зоны у всех «Пылесос»; Алиса различает их по комнате («убери в спальне»).</p>
+</div>
+
+<style>
+  .wrap { padding: 20px; max-width: 720px; }
+  .wrap code { background:#eef0f3; padding:1px 5px; border-radius:4px; font-size:13px; }
+  .muted { color:#8a8f98; }
+  .muted.small { font-size:12px; }
+  .ok { background:#e6f4ea; color:#1e7e34; border-radius:8px; padding:10px 14px; margin-bottom:14px; }
+  .err { background:#fdecea; color:#c0392b; border-radius:8px; padding:10px 14px; margin-bottom:14px; }
+  .vac { background:#fff; border-radius:12px; padding:16px 18px; margin-bottom:18px; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .vac h2 { font-size:16px; margin:0 0 10px; }
+  .vac table { width:100%; border-collapse:collapse; margin-bottom:12px; }
+  .vac th, .vac td { text-align:left; padding:6px 8px; border-bottom:1px solid #eee; font-size:14px; }
+  .vac select { width:100%; padding:6px 8px; border:1px solid #d0d3d9; border-radius:8px; }
+  .primary { background:#ffcc00; border:0; border-radius:8px; padding:10px 18px; font-weight:600; cursor:pointer; }
+</style>
+{{end}}

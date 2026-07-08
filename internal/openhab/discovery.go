@@ -18,6 +18,7 @@ type ohItem struct {
 	Type       string            `json:"type"`
 	GroupType  string            `json:"groupType"` // base type when Type=="Group" (Group:Switch etc.)
 	Label      string            `json:"label"`
+	State      string            `json:"state"` // current value (fetched only where needed, e.g. Mapsegments)
 	Tags       []string          `json:"tags"`
 	GroupNames []string          `json:"groupNames"` // parent groups (openHAB semantic hierarchy)
 	Meta       map[string]ohMeta `json:"metadata"`   // e.g. "yahome" override, "ga"

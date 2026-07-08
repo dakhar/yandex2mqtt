@@ -319,6 +319,16 @@ func (r *CatalogRepo) DeleteAllDevices(ctx context.Context, userID string) error
 	return err
 }
 
+// DeleteVacuumGroup removes a robot vacuum's parent and all its zone devices
+// (by group id), scoped to the owner. Used to re-create a vacuum setup idempotently.
+func (r *CatalogRepo) DeleteVacuumGroup(ctx context.Context, userID, parentID, groupID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM devices WHERE user_id = ? AND (id = ? OR id IN
+		 (SELECT device_id FROM vacuum_zones WHERE group_id = ?))`,
+		userID, parentID, groupID)
+	return err
+}
+
 func nullRoomID(roomID *string) (sql.NullInt64, error) {
 	if roomID == nil || *roomID == "" {
 		return sql.NullInt64{}, nil

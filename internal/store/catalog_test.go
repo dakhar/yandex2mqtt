@@ -120,6 +120,55 @@ func TestImportLoadRoundTrip(t *testing.T) {
 }
 
 // The round-tripped device must still validate and construct as a domain device.
+// A robot-vacuum zone's Vacuum block must survive a save/load round-trip, and
+// DeleteVacuumGroup must remove the parent and its zones together.
+func TestVacuumZonePersistence(t *testing.T) {
+	repo := openTestRepo(t)
+	ctx := context.Background()
+
+	parent := config.Device{ID: "vac_Robot", Name: "Робот", Type: "devices.types.vacuum_cleaner",
+		AllowedUsers: []string{"1"}, Transport: "openhab",
+		Capabilities: []config.Capability{{Type: "devices.capabilities.on_off"}},
+		OpenHAB:      []config.OpenHABBinding{{Kind: "equipment", Item: "Robot"}}}
+	zone := config.Device{ID: "vac_Robot_4", Name: "Пылесос", Type: "devices.types.vacuum_cleaner",
+		AllowedUsers: []string{"1"}, Transport: "openhab",
+		Capabilities: []config.Capability{{Type: "devices.capabilities.on_off"}},
+		Vacuum: &config.VacuumZone{GroupID: "Robot", SegmentID: "4", CleanTarget: "Robot_Cleansegments",
+			OpTarget: "Robot_Operation", HomeCmd: "HOME", DebounceMs: 2500}}
+	if err := repo.SaveDevice(ctx, "1", nil, parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveDevice(ctx, "1", nil, zone); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := repo.LoadAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got *config.VacuumZone
+	for _, d := range loaded {
+		if d.ID == "vac_Robot_4" {
+			got = d.Vacuum
+		}
+	}
+	if got == nil {
+		t.Fatal("zone Vacuum block not loaded")
+	}
+	if got.GroupID != "Robot" || got.SegmentID != "4" || got.CleanTarget != "Robot_Cleansegments" ||
+		got.OpTarget != "Robot_Operation" || got.HomeCmd != "HOME" || got.DebounceMs != 2500 {
+		t.Fatalf("vacuum block round-trip: %+v", got)
+	}
+
+	// DeleteVacuumGroup drops parent + zones.
+	if err := repo.DeleteVacuumGroup(ctx, "1", "vac_Robot", "Robot"); err != nil {
+		t.Fatal(err)
+	}
+	if devs, _ := repo.LoadAll(ctx); len(devs) != 0 {
+		t.Fatalf("group not fully deleted: %d devices remain", len(devs))
+	}
+}
+
 func TestImportedCatalogValidates(t *testing.T) {
 	repo := openTestRepo(t)
 	ctx := context.Background()
