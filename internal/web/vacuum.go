@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/dakhar/yandex2mqtt/internal/auth"
 	"github.com/dakhar/yandex2mqtt/internal/config"
@@ -121,8 +122,17 @@ func (h *Handlers) CreateVacuum(w http.ResponseWriter, r *http.Request) {
 		if room == "" {
 			continue
 		}
+		name := strings.TrimSpace(r.PostFormValue("name_" + seg.ID))
+		if name == "" {
+			name = "Пылесос"
+		}
+		if utf8.RuneCountInString(name) > maxDeviceNameLen {
+			h.render(w, "vacuum.html", map[string]any{"User": u,
+				"Error": "Название зоны — не длиннее 25 символов: " + name})
+			return
+		}
 		zone := config.Device{
-			ID: vacuumID(item, seg.ID), Name: "Пылесос", Type: "devices.types.vacuum_cleaner",
+			ID: vacuumID(item, seg.ID), Name: name, Type: "devices.types.vacuum_cleaner",
 			Transport: "openhab", Room: room, AllowedUsers: []string{u.ID},
 			Capabilities: []config.Capability{{Type: "devices.capabilities.on_off",
 				Retrievable: setup.StatusItem != "", Reportable: setup.StatusItem != ""}},

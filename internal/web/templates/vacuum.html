@@ -24,12 +24,13 @@
     <h2>{{.Name}} <span class="muted">({{.Item}})</span></h2>
     {{if not .Segments}}<div class="muted" style="margin-bottom:10px">Сегменты карты пока не получены (item <code>vac_segments</code> пуст). Можно создать родителя «вся квартира» сейчас; по-комнатные зоны появятся здесь, когда робот отдаст карту (разбуди робота).</div>{{end}}
     <table class="users">
-      <thead><tr><th>Сегмент</th><th>Комната</th></tr></thead>
+      <thead><tr><th>Сегмент</th><th>Название</th><th>Комната</th></tr></thead>
       <tbody>
       {{$rooms := $.Rooms}}
       {{range .Segments}}
         <tr>
           <td>{{.Name}} <span class="muted">#{{.ID}}</span></td>
+          <td><input type="text" name="name_{{.ID}}" maxlength="25" value="Пылесос" placeholder="напр. Пылесос у входа"></td>
           <td>
             <select name="room_{{.ID}}">
               <option value="">— не создавать —</option>
@@ -44,7 +45,7 @@
   </form>
   {{end}}
 
-  <p class="muted small">Совет: заранее заведи комнаты на <a href="/app">доске</a> — они появятся в списке. Название зоны у всех «Пылесос»; Алиса различает их по комнате («убери в спальне»).</p>
+  <p class="muted small">Совет: заранее заведи комнаты на <a href="/app">доске</a> — они появятся в списке. Если в одной комнате несколько зон — задай им разные названия (напр. «Пылесос у входа», «Пылесос в коридоре»), иначе Алиса их не различит.</p>
 </div>
 
 <style>
