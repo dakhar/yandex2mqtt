@@ -43,8 +43,20 @@ type Device struct {
 	errorCode     string            // current device-level error_code ("" = none)
 	streamURL     string            // current HLS URL for a video_stream capability
 
+	// A zone device of a robot vacuum: its on_off feeds the shared VacuumGroup
+	// (which batches rooms into one segment-clean command) instead of publishing.
+	vacuum    *VacuumGroup
+	segmentID string
+
 	publish PublishFunc
 	log     *slog.Logger
+}
+
+// SetVacuumGroup marks this device as a robot-vacuum zone: its on_off actions are
+// routed to the shared group (keyed by segmentID) rather than published directly.
+func (d *Device) SetVacuumGroup(g *VacuumGroup, segmentID string) {
+	d.vacuum = g
+	d.segmentID = segmentID
 }
 
 type capState struct {
@@ -221,6 +233,21 @@ func (d *Device) SetCapabilityState(val any, capType, instance string, relative 
 			},
 		}
 	}
+	// A vacuum zone's on_off feeds the shared group (segment aggregation), not a
+	// direct publish. cur is updated optimistically until the parent status
+	// arrives via its own state binding.
+	if actType == "on_off" && d.vacuum != nil {
+		on := toBool(val)
+		if c := d.findCap(capType, instance); c != nil {
+			c.cur = &State{Instance: instance, Value: on}
+		}
+		d.vacuum.SetRoom(d.segmentID, on)
+		return ActionCapResult{
+			Type:  capType,
+			State: ActionState{Instance: instance, ActionResult: ActionResult{Status: "DONE"}},
+		}
+	}
+
 	value := d.mapValue(val, actType, instance, true)
 
 	cap := d.findCap(capType, instance)
