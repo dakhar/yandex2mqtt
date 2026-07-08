@@ -26,6 +26,7 @@ import (
 	"github.com/dakhar/yandex2mqtt/internal/mqtt"
 	"github.com/dakhar/yandex2mqtt/internal/openhab"
 	"github.com/dakhar/yandex2mqtt/internal/store"
+	"github.com/dakhar/yandex2mqtt/internal/stream"
 	"github.com/dakhar/yandex2mqtt/internal/web"
 	"github.com/dakhar/yandex2mqtt/internal/yandex"
 )
@@ -161,6 +162,12 @@ func run() error {
 		}
 	})
 
+	// HLS proxy: get_stream returns a signed public URL routed through /stream,
+	// so Alice's player reaches a camera's local HLS (CORS + reachability) with
+	// no transcoding on our side.
+	streamProxy := stream.New(cfg.Session.Secret, time.Hour)
+	api.SetStreamRewriter(streamProxy.PublicURL)
+
 	board := web.New(store.NewRoomRepo(db), catalog, manager, logger)
 	board.SetDiscovery(ohConn, store.NewSettingsRepo(db), store.NewIgnoreRepo(db))
 	if notifier != nil {
@@ -230,6 +237,9 @@ func run() error {
 	root.With(sessions.RequireAdmin).Get("/app/users", sessions.UsersPage)
 	root.With(sessions.RequireAdmin).Post("/app/users", sessions.CreateUser)
 	root.With(sessions.RequireAdmin).Post("/app/users/{id}/delete", sessions.DeleteUser)
+
+	// Public, tokenized HLS proxy (no login: Alice's player calls it directly).
+	root.HandleFunc("/stream/{token}", streamProxy.Handler())
 
 	root.Mount("/provider", api.Routes())
 

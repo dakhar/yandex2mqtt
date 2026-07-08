@@ -25,6 +25,9 @@ type API struct {
 	log      *slog.Logger
 	auth     func(http.Handler) http.Handler
 	onUnlink func(userID string) // optional token revocation hook (step 5)
+	// streamURL rewrites a raw HLS URL into a public proxied one for a given
+	// request; nil leaves get_stream results untouched.
+	streamURL func(r *http.Request, raw string) string
 }
 
 // New builds the API. auth is the authentication middleware (StubAuth in step 4,
@@ -38,6 +41,10 @@ func New(store Store, auth func(http.Handler) http.Handler, log *slog.Logger) *A
 
 // SetUnlinkHook registers a callback invoked on account unlink.
 func (a *API) SetUnlinkHook(f func(userID string)) { a.onUnlink = f }
+
+// SetStreamRewriter registers the function that turns a raw HLS URL into a public
+// proxied one (see internal/stream). Without it, get_stream returns the raw URL.
+func (a *API) SetStreamRewriter(f func(r *http.Request, raw string) string) { a.streamURL = f }
 
 // Routes returns the provider router. Mount it at the endpoint base path
 // (the legacy service used "/provider", which Yandex has registered).
@@ -117,12 +124,28 @@ func (a *API) action(w http.ResponseWriter, r *http.Request) {
 		}
 		out := ActionDeviceResult{ID: rd.ID}
 		for _, c := range rd.Capabilities {
-			out.Capabilities = append(out.Capabilities,
-				d.SetCapabilityState(c.State.Value, c.Type, c.State.Instance, c.State.Relative))
+			res := d.SetCapabilityState(c.State.Value, c.Type, c.State.Instance, c.State.Relative)
+			a.rewriteStream(r, &res)
+			out.Capabilities = append(out.Capabilities, res)
 		}
 		resp.Payload.Devices = append(resp.Payload.Devices, out)
 	}
 	a.writeJSON(w, resp)
+}
+
+// rewriteStream replaces a get_stream result's raw HLS URL with a public proxied
+// one, so Alice's player reaches the camera through us (CORS + reachability).
+func (a *API) rewriteStream(r *http.Request, res *device.ActionCapResult) {
+	if a.streamURL == nil || res.Type != "devices.capabilities.video_stream" {
+		return
+	}
+	m, ok := res.State.Value.(map[string]any)
+	if !ok {
+		return
+	}
+	if raw, _ := m["stream_url"].(string); raw != "" {
+		m["stream_url"] = a.streamURL(r, raw)
+	}
 }
 
 func (a *API) unlink(w http.ResponseWriter, r *http.Request) {
