@@ -39,7 +39,8 @@ type Device struct {
 	cmdTarget     map[string]string // instance -> command target (topic/item)
 	stateBindings []StateBinding
 	invert        map[string]bool   // range instance -> invert percentage
-	errorMap      map[string]string // raw status value -> Yandex error_code
+	errorRules    []errRule         // ordered: first active rule wins
+	errorVals     map[string]string // rule instance -> its source's current value
 	errorCode     string            // current device-level error_code ("" = none)
 	streamURL     string            // current HLS URL for a video_stream capability
 
@@ -298,9 +299,14 @@ func (d *Device) SetCapabilityState(val any, capType, instance string, relative 
 // UpdateFromMQTT applies an incoming MQTT message to the matching capability or
 // property. Port of updateState in device.js.
 func (d *Device) UpdateFromMQTT(val string, instance string, isProp bool) {
-	// The status source maps to a device-level error_code (unmapped = no error).
-	if instance == ErrorInstance {
-		d.errorCode = d.errorMap[val]
+	// An error-rule source updates its value; the effective error_code is the
+	// first rule whose source currently equals its trigger value.
+	if strings.HasPrefix(instance, errorPrefix) {
+		if d.errorVals == nil {
+			d.errorVals = map[string]string{}
+		}
+		d.errorVals[instance] = val
+		d.recomputeError()
 		return
 	}
 	// The video_stream source carries the current HLS URL (not retrievable).
@@ -399,9 +405,29 @@ func (d *Device) findPropByInstance(instance string) *propState {
 // (the bridge needs the devices before it can offer a publisher).
 func (d *Device) SetPublisher(p PublishFunc) { d.publish = p }
 
-// ErrorInstance is the reserved state-binding instance carrying a device's
-// status source, mapped to Yandex's device-level error_code.
-const ErrorInstance = "__error__"
+// errorPrefix namespaces the reserved state-binding instances that feed error
+// rules (one per rule: errorPrefix + index).
+const errorPrefix = "__error__"
+
+// errRule is one resolved error rule: when the source bound to Instance reports
+// Value, the device's error_code becomes Code.
+type errRule struct {
+	instance string
+	value    string
+	code     string
+}
+
+// recomputeError sets errorCode to the first rule whose source currently matches
+// its trigger value (no match = no error).
+func (d *Device) recomputeError() {
+	for _, r := range d.errorRules {
+		if d.errorVals[r.instance] == r.value {
+			d.errorCode = r.code
+			return
+		}
+	}
+	d.errorCode = ""
+}
 
 // StreamInstance is the video_stream capability's only instance; its state
 // binding carries the current HLS URL, returned on a get_stream action.
@@ -409,6 +435,10 @@ const StreamInstance = "get_stream"
 
 // ErrorCode returns the device's current Yandex error_code ("" = no error).
 func (d *Device) ErrorCode() string { return d.errorCode }
+
+// IsErrorInstance reports whether a state-binding instance feeds an error rule
+// (so a status change can be reported with the device's error_code).
+func IsErrorInstance(instance string) bool { return strings.HasPrefix(instance, errorPrefix) }
 
 // StateBinding ties a capability/property instance to its external state source
 // (an MQTT state topic or an openHAB item), for connectors to subscribe to.
@@ -426,19 +456,20 @@ func (d *Device) StateBindings() []StateBinding { return d.stateBindings }
 // bindings from the device's MQTT topics or openHAB items.
 func (d *Device) buildBindings(c config.Device) {
 	d.cmdTarget = map[string]string{}
-	// Device status -> error_code (works for both transports).
-	if c.Error != nil {
-		d.errorMap = map[string]string{}
-		for _, m := range c.Error.Mapping {
-			d.errorMap[m.Value] = m.Code
-		}
-		src, path := c.Error.State, c.Error.StatePath
+	d.errorVals = map[string]string{}
+	// Error rules -> device error_code (both transports). Each rule gets its own
+	// reserved state binding so different codes can come from different sources.
+	for i, e := range c.Errors {
+		src, path := e.State, e.StatePath
 		if d.Transport == "openhab" {
-			src, path = c.Error.Item, ""
+			src, path = e.Item, ""
 		}
-		if src != "" {
-			d.stateBindings = append(d.stateBindings, StateBinding{Instance: ErrorInstance, Source: src, IsProp: true, Path: path})
+		if src == "" || e.Code == "" {
+			continue
 		}
+		inst := errorPrefix + strconv.Itoa(i)
+		d.errorRules = append(d.errorRules, errRule{instance: inst, value: e.Value, code: e.Code})
+		d.stateBindings = append(d.stateBindings, StateBinding{Instance: inst, Source: src, IsProp: true, Path: path})
 	}
 	if d.Transport == "openhab" {
 		for _, b := range c.OpenHAB {

@@ -208,36 +208,48 @@ func TestVideoStreamGetStream(t *testing.T) {
 	}
 }
 
-func TestErrorCodeFromStatus(t *testing.T) {
+func TestErrorCodeFromRules(t *testing.T) {
 	d := New(config.Device{
 		ID: "V", Type: "devices.types.vacuum_cleaner",
 		MQTT: config.MQTTMapping{Capabilities: []config.MQTTTopic{{Instance: "on", Set: "v/set", State: "v/state"}}},
-		Error: &config.ErrorBinding{State: "v/status", Mapping: []config.ErrorPair{
-			{Value: "stuck", Code: "DEVICE_STUCK"}, {Value: "dustbin_full", Code: "CONTAINER_FULL"}}},
+		// Different codes from different sources; first active rule wins.
+		Errors: []config.ErrorRule{
+			{Code: "DEVICE_STUCK", State: "v/status", Value: "stuck"},
+			{Code: "CONTAINER_FULL", State: "v/dustbag", Value: "full"},
+		},
 		Capabilities: []config.Capability{{Type: "devices.capabilities.on_off", Retrievable: true}},
 	}, nil, nil)
 
-	// The status source is subscribed as a reserved state binding.
-	found := false
-	for _, b := range d.StateBindings() {
-		if b.Instance == ErrorInstance && b.Source == "v/status" {
-			found = true
+	// Each rule binds to its own source.
+	errInst := func(src string) string {
+		for _, b := range d.StateBindings() {
+			if IsErrorInstance(b.Instance) && b.Source == src {
+				return b.Instance
+			}
 		}
+		return ""
 	}
-	if !found {
-		t.Fatal("no error state binding")
+	if errInst("v/status") == "" || errInst("v/dustbag") == "" {
+		t.Fatalf("missing error bindings: %+v", d.StateBindings())
 	}
 	if d.QueryState().ErrorCode != "" {
 		t.Fatal("expected no error initially")
 	}
-	d.UpdateFromMQTT("stuck", ErrorInstance, true)
+
+	// dustbag full -> CONTAINER_FULL (second rule).
+	d.UpdateFromMQTT("full", errInst("v/dustbag"), true)
+	if got := d.QueryState().ErrorCode; got != "CONTAINER_FULL" {
+		t.Fatalf("error = %q, want CONTAINER_FULL", got)
+	}
+	// status stuck -> DEVICE_STUCK wins (earlier rule) even with dustbag full.
+	d.UpdateFromMQTT("stuck", errInst("v/status"), true)
 	if got := d.QueryState().ErrorCode; got != "DEVICE_STUCK" {
 		t.Fatalf("error = %q, want DEVICE_STUCK", got)
 	}
-	// An unmapped status clears the error.
-	d.UpdateFromMQTT("cleaning", ErrorInstance, true)
-	if got := d.QueryState().ErrorCode; got != "" {
-		t.Fatalf("error not cleared: %q", got)
+	// clearing status falls back to the still-active dustbag rule.
+	d.UpdateFromMQTT("ok", errInst("v/status"), true)
+	if got := d.QueryState().ErrorCode; got != "CONTAINER_FULL" {
+		t.Fatalf("error = %q, want CONTAINER_FULL after status clear", got)
 	}
 }
 

@@ -82,7 +82,7 @@ func (n *Notifier) OnUpdate(d *device.Device, instance string, _ bool) {
 	}
 	q := d.QueryState()
 	dev := notifyDevice{ID: d.ID}
-	if instance == device.ErrorInstance {
+	if device.IsErrorInstance(instance) {
 		// Status changed: report full state + error_code (empty code clears it).
 		dev.Capabilities = q.Capabilities
 		dev.Properties = q.Properties

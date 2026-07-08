@@ -44,14 +44,10 @@
   </section>
 
   <section>
-    <h2>Статус → ошибка <span class="hint">(error_code, необязательно)</span></h2>
-    <div class="hint">Привязка item/топика статуса к коду ошибки Яндекса (застрял, контейнер полон, низкий заряд…). Приходящее значение, не попавшее в таблицу, означает «нет ошибки».</div>
-    <div class="oh-field"><label>openHAB item статуса</label><input id="err-item" type="text" list="oh-items" placeholder="VacuumCleaner_Status"></div>
-    <div class="mqtt-field"><label>MQTT state-топик статуса</label><input id="err-state" type="text" placeholder="device/status"></div>
-    <div class="mqtt-field"><label>JSON-путь <span class="hint">(необязательно)</span></label><input id="err-path" type="text" placeholder="напр. error"></div>
-    <label>Соответствие: приходящее значение → код Яндекса</label>
+    <h2>Ошибки <span class="hint">(error_code, необязательно)</span></h2>
+    <div class="hint">Код Яндекса активируется, когда указанный item/топик принимает заданное значение. Разные коды — из разных источников. Первое сработавшее правило (сверху вниз) побеждает; ни одно = «нет ошибки».</div>
     <div id="errmap"></div>
-    <button type="button" class="add" onclick="addErrRow()">+ строка</button>
+    <button type="button" class="add" onclick="addErrRow()">+ правило</button>
   </section>
 
   <div class="actions">
@@ -91,9 +87,12 @@
   .flags > label { display:flex; align-items:center; gap:6px; font-size:13px; margin:2px 0; }
   .flags > label input { width:auto; }
   .flags .hint b { color:#495057; }
-  #errmap .erow { display:grid; grid-template-columns:1fr 16px 1fr auto; gap:8px; align-items:center; margin-bottom:6px; }
-  #errmap .arr { text-align:center; color:#8a8f98; }
-  #errmap .erow button { border:0; background:transparent; color:#c0392b; cursor:pointer; font-size:16px; }
+  #errmap .erow { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px; }
+  #errmap .erow .ec { flex:0 0 auto; width:auto; }
+  #errmap .erow .oh-field, #errmap .erow .mqtt-field { flex:1 1 140px; }
+  #errmap .erow input { width:100%; box-sizing:border-box; }
+  #errmap .erow .e-val { flex:1 1 120px; }
+  #errmap .erow button { border:0; background:transparent; color:#c0392b; cursor:pointer; font-size:16px; margin-left:auto; }
   body[data-transport="openhab"] .mqtt-field { display:none; }
   body[data-transport="mqtt"] .oh-field { display:none; }
   .oh-missing { border-color:#c0392b !important; background:#fff5f5; }
@@ -151,7 +150,6 @@ Promise.all([
   populateOHItems(items);
   const typeSel = document.getElementById('type');
   s.device_types.forEach(t => typeSel.add(new Option(lbl('device_types', t), t)));
-  document.getElementById('err-item').addEventListener('input', function () { markItem(this); });
   if (DEVICE) prefill(DEVICE);
   onTransport();
 });
@@ -202,36 +200,36 @@ function prefill(d) {
   document.getElementById('description').value = d.description || '';
   (d.capabilities || []).forEach(c => addRow('cap', c));
   (d.properties || []).forEach(p => addRow('prop', p));
-  if (d.error) {
-    document.getElementById('err-item').value = d.error.item || '';
-    document.getElementById('err-state').value = d.error.state || '';
-    document.getElementById('err-path').value = d.error.state_path || '';
-    (d.error.mapping || []).forEach(m => addErrRow(m.value, m.code));
-  }
+  (d.errors || []).forEach(e => addErrRow(e));
 }
 
-function addErrRow(value, code) {
+// One error rule row: Yandex code <- item/topic = value.
+function addErrRow(rule) {
+  rule = rule || {};
   const box = document.getElementById('errmap');
   const div = document.createElement('div');
   div.className = 'erow';
-  const opts = (SCHEMA.error_codes || []).map(c => `<option value="${c}"${c === code ? ' selected' : ''}>${c}</option>`).join('');
-  div.innerHTML = `<input type="text" class="ev" placeholder="приходящее значение" value="${attr(fmt(value))}">
-                   <span class="arr">→</span>
-                   <select class="ec"><option value="">— код —</option>${opts}</select>
-                   <button type="button" onclick="this.parentNode.remove()">×</button>`;
+  const opts = (SCHEMA.error_codes || []).map(c => `<option value="${c}"${c === rule.code ? ' selected' : ''}>${c}</option>`).join('');
+  div.innerHTML = `
+    <select class="ec"><option value="">— код —</option>${opts}</select>
+    <span class="oh-field"><input type="text" class="e-item" list="oh-items" value="${attr(rule.item)}" placeholder="openHAB item" oninput="markItem(this)"></span>
+    <span class="mqtt-field"><input type="text" class="e-state" value="${attr(rule.state)}" placeholder="state-топик"></span>
+    <span class="mqtt-field"><input type="text" class="e-path" value="${attr(rule.state_path)}" placeholder="JSON-путь"></span>
+    <input type="text" class="e-val" value="${attr(rule.value)}" placeholder="значение (напр. full)">
+    <button type="button" onclick="this.parentNode.remove()">×</button>`;
   box.appendChild(div);
+  const fi = div.querySelector('.e-item');
+  if (fi) markItem(fi);
 }
 
-function collectError() {
-  const item = document.getElementById('err-item').value.trim();
-  const state = document.getElementById('err-state').value.trim();
-  const path = document.getElementById('err-path').value.trim();
-  const mapping = [...document.querySelectorAll('#errmap .erow')].map(r => ({
-    value: r.querySelector('.ev').value.trim(),
-    code: r.querySelector('.ec').value
-  })).filter(p => p.value !== '' && p.code !== '');
-  if ((!item && !state) || mapping.length === 0) return null;
-  return { item, state, state_path: path, mapping };
+function collectErrors() {
+  return [...document.querySelectorAll('#errmap .erow')].map(r => ({
+    code: r.querySelector('.ec').value,
+    item: r.querySelector('.e-item').value.trim(),
+    state: r.querySelector('.e-state').value.trim(),
+    state_path: r.querySelector('.e-path').value.trim(),
+    value: r.querySelector('.e-val').value.trim()
+  })).filter(e => e.code !== '' && (e.item !== '' || e.state !== ''));
 }
 
 function addRow(kind, data) {
@@ -438,8 +436,7 @@ function save() {
     capabilities: collect('cap'),
     properties: collect('prop')
   };
-  const err = collectError();
-  if (err) payload.error = err;
+  payload.errors = collectErrors();
   const url = EDIT_ID ? '/app/devices/' + encodeURIComponent(EDIT_ID) : '/app/devices';
   fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
     .then(async r => {

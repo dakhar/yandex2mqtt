@@ -55,7 +55,7 @@ func (r *CatalogRepo) LoadAll(ctx context.Context) ([]config.Device, error) {
 		if devices[i].OpenHAB, err = r.loadOpenHABBindings(ctx, id); err != nil {
 			return nil, err
 		}
-		if devices[i].Error, err = r.loadErrorBinding(ctx, id); err != nil {
+		if devices[i].Errors, err = r.loadErrorRules(ctx, id); err != nil {
 			return nil, err
 		}
 		if devices[i].Vacuum, err = r.loadVacuumZone(ctx, id); err != nil {
@@ -81,25 +81,24 @@ func (r *CatalogRepo) loadVacuumZone(ctx context.Context, deviceID string) (*con
 	return &v, nil
 }
 
-// loadErrorBinding loads the device's status->error_code binding (nil if none).
-func (r *CatalogRepo) loadErrorBinding(ctx context.Context, deviceID string) (*config.ErrorBinding, error) {
-	var b config.ErrorBinding
-	var mapping string
-	err := r.db.QueryRowContext(ctx,
-		`SELECT item, state_topic, state_path, mapping FROM device_errors WHERE device_id = ?`, deviceID).
-		Scan(&b.Item, &b.State, &b.StatePath, &mapping)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
+// loadErrorRules loads the device's error_code rules (nil if none).
+func (r *CatalogRepo) loadErrorRules(ctx context.Context, deviceID string) ([]config.ErrorRule, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT code, item, state_topic, state_path, value FROM error_rules
+		 WHERE device_id = ? ORDER BY ord, id`, deviceID)
 	if err != nil {
 		return nil, err
 	}
-	if mapping != "" {
-		if err := json.Unmarshal([]byte(mapping), &b.Mapping); err != nil {
+	defer rows.Close()
+	var out []config.ErrorRule
+	for rows.Next() {
+		var e config.ErrorRule
+		if err := rows.Scan(&e.Code, &e.Item, &e.State, &e.StatePath, &e.Value); err != nil {
 			return nil, err
 		}
+		out = append(out, e)
 	}
-	return &b, nil
+	return out, rows.Err()
 }
 
 func (r *CatalogRepo) loadOpenHABBindings(ctx context.Context, deviceID string) ([]config.OpenHABBinding, error) {
@@ -154,7 +153,7 @@ func (r *CatalogRepo) GetDevice(ctx context.Context, userID, id string) (config.
 	if d.ValueMapping, err = r.loadValueMappings(ctx, id); err != nil {
 		return config.Device{}, "", false, err
 	}
-	if d.Error, err = r.loadErrorBinding(ctx, id); err != nil {
+	if d.Errors, err = r.loadErrorRules(ctx, id); err != nil {
 		return config.Device{}, "", false, err
 	}
 	if d.Vacuum, err = r.loadVacuumZone(ctx, id); err != nil {

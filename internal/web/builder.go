@@ -112,20 +112,16 @@ type deviceInput struct {
 	Description  string      `json:"description"`
 	Capabilities []capInput  `json:"capabilities"`
 	Properties   []capInput  `json:"properties"`
-	Error        *errorInput `json:"error,omitempty"`
+	Errors       []errorRule `json:"errors,omitempty"`
 }
 
-// errorInput is the device status -> error_code binding from the form.
-type errorInput struct {
-	Item      string      `json:"item"`
-	State     string      `json:"state"`
-	StatePath string      `json:"state_path"`
-	Mapping   []errorPair `json:"mapping"`
-}
-
-type errorPair struct {
-	Value string `json:"value"`
-	Code  string `json:"code"`
+// errorRule is one "Yandex code <- item = value" row from the form.
+type errorRule struct {
+	Code      string `json:"code"`
+	Item      string `json:"item"`
+	State     string `json:"state"`
+	StatePath string `json:"state_path"`
+	Value     string `json:"value"`
 }
 
 // CreateDevice builds, validates, persists and hot-reloads a new device
@@ -272,16 +268,13 @@ func buildDevice(userID, id string, in deviceInput) config.Device {
 		}
 		addMapping(actType(p.Type), p.Instance, p.Mapping)
 	}
-	if e := in.Error; e != nil && (e.Item != "" || e.State != "") {
-		eb := &config.ErrorBinding{Item: e.Item, State: e.State, StatePath: e.StatePath}
-		for _, m := range e.Mapping {
-			if m.Value != "" && m.Code != "" {
-				eb.Mapping = append(eb.Mapping, config.ErrorPair{Value: m.Value, Code: m.Code})
-			}
+	for _, e := range in.Errors {
+		if e.Code == "" || (e.Item == "" && e.State == "") {
+			continue
 		}
-		if len(eb.Mapping) > 0 {
-			d.Error = eb
-		}
+		d.Errors = append(d.Errors, config.ErrorRule{
+			Code: e.Code, Item: e.Item, State: e.State, StatePath: e.StatePath, Value: e.Value,
+		})
 	}
 	return d
 }
@@ -352,12 +345,10 @@ func toInput(d config.Device, roomID string) deviceInput {
 	}
 
 	in := deviceInput{Name: d.Name, Type: d.Type, Transport: d.Transport, RoomID: roomID, Description: d.Description}
-	if d.Error != nil {
-		ei := &errorInput{Item: d.Error.Item, State: d.Error.State, StatePath: d.Error.StatePath}
-		for _, p := range d.Error.Mapping {
-			ei.Mapping = append(ei.Mapping, errorPair{Value: p.Value, Code: p.Code})
-		}
-		in.Error = ei
+	for _, e := range d.Errors {
+		in.Errors = append(in.Errors, errorRule{
+			Code: e.Code, Item: e.Item, State: e.State, StatePath: e.StatePath, Value: e.Value,
+		})
 	}
 
 	if d.Transport == "openhab" {

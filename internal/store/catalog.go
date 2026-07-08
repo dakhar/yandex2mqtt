@@ -57,13 +57,17 @@ CREATE TABLE IF NOT EXISTS app_config (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL DEFAULT ''
 );
-CREATE TABLE IF NOT EXISTS device_errors (
-    device_id   TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS error_rules (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id   TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    ord         INTEGER NOT NULL DEFAULT 0,
+    code        TEXT NOT NULL,
     item        TEXT NOT NULL DEFAULT '',   -- openHAB item
     state_topic TEXT NOT NULL DEFAULT '',   -- MQTT topic
     state_path  TEXT NOT NULL DEFAULT '',
-    mapping     TEXT NOT NULL DEFAULT ''    -- JSON [{value,code}]
+    value       TEXT NOT NULL DEFAULT ''    -- source value that activates code
 );
+CREATE INDEX IF NOT EXISTS idx_errrule_dev ON error_rules(device_id);
 CREATE TABLE IF NOT EXISTS capabilities (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id   TEXT    NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
@@ -233,14 +237,11 @@ func insertChildren(ctx context.Context, tx *sql.Tx, d config.Device) error {
 			return err
 		}
 	}
-	if d.Error != nil {
-		mj, err := json.Marshal(d.Error.Mapping)
-		if err != nil {
-			return err
-		}
+	for i, e := range d.Errors {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO device_errors (device_id, item, state_topic, state_path, mapping) VALUES (?, ?, ?, ?, ?)`,
-			d.ID, d.Error.Item, d.Error.State, d.Error.StatePath, string(mj)); err != nil {
+			`INSERT INTO error_rules (device_id, ord, code, item, state_topic, state_path, value)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			d.ID, i, e.Code, e.Item, e.State, e.StatePath, e.Value); err != nil {
 			return err
 		}
 	}

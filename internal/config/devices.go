@@ -26,8 +26,9 @@ type Device struct {
 	Properties   []Property     `yaml:"properties,omitempty"`
 	// OpenHAB holds per-instance item bindings when Transport == "openhab".
 	OpenHAB []OpenHABBinding `yaml:"openhab,omitempty"`
-	// Error binds a device status source to Yandex's device-level error_code.
-	Error *ErrorBinding `yaml:"error,omitempty"`
+	// Errors maps device sources to Yandex's device-level error_code (per-code
+	// item + value). Rules are evaluated in order; the first active one wins.
+	Errors []ErrorRule `yaml:"errors,omitempty"`
 	// Vacuum, when set, makes this device a robot-vacuum zone: its on_off is
 	// aggregated with the other zones of the same GroupID into one segment-clean
 	// command (see device.VacuumGroup) instead of publishing directly.
@@ -40,27 +41,21 @@ type Device struct {
 type VacuumZone struct {
 	GroupID     string `yaml:"group_id"`
 	SegmentID   string `yaml:"segment_id"`
-	CleanTarget string `yaml:"clean_target"`         // segment-clean command (Cleansegments)
-	OpTarget    string `yaml:"op_target,omitempty"`  // operation command for stop/home
-	HomeCmd     string `yaml:"home_cmd,omitempty"`   // payload to stop/return (default "HOME")
+	CleanTarget string `yaml:"clean_target"`          // segment-clean command (Cleansegments)
+	OpTarget    string `yaml:"op_target,omitempty"`   // operation command for stop/home
+	HomeCmd     string `yaml:"home_cmd,omitempty"`    // payload to stop/return (default "HOME")
 	DebounceMs  int    `yaml:"debounce_ms,omitempty"` // union debounce window (0 = default)
 }
 
-// ErrorBinding maps a device's status item/topic to a Yandex error_code. Source
-// is an openHAB item (openhab transport) or an MQTT state topic; StatePath
-// optionally extracts a JSON field. Mapping translates raw values to error codes
-// (an unmapped/absent value means "no error").
-type ErrorBinding struct {
-	Item      string      `yaml:"item,omitempty"`
-	State     string      `yaml:"state,omitempty"`
-	StatePath string      `yaml:"state_path,omitempty"`
-	Mapping   []ErrorPair `yaml:"mapping,omitempty"`
-}
-
-// ErrorPair maps one raw device value to a Yandex error_code.
-type ErrorPair struct {
-	Value string `yaml:"value"`
-	Code  string `yaml:"code"`
+// ErrorRule reports a Yandex device-level error_code when a source reaches a
+// value: Item (openHAB) or State (MQTT topic, with optional StatePath) equal to
+// Value activates Code. Different codes can come from different items.
+type ErrorRule struct {
+	Code      string `yaml:"code"`
+	Item      string `yaml:"item,omitempty"`
+	State     string `yaml:"state,omitempty"`
+	StatePath string `yaml:"state_path,omitempty"`
+	Value     string `yaml:"value"`
 }
 
 // OpenHABBinding ties a capability/property instance to an openHAB item.
