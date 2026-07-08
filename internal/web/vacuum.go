@@ -12,9 +12,6 @@ import (
 	"github.com/dakhar/yandex2mqtt/internal/version"
 )
 
-// homeRoom is where a robot vacuum's parent (whole-house) device lives.
-const homeRoom = "Дом"
-
 // Version writes the build version as plain text (GET /version), for health
 // checks and quick "what's deployed" queries.
 func (h *Handlers) Version(w http.ResponseWriter, _ *http.Request) {
@@ -105,10 +102,10 @@ func (h *Handlers) CreateVacuum(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var toSave []config.Device
-	// Parent (whole-house) in "Дом".
+	// Parent (whole-house). Its room is the equipment's openHAB Location ancestor
+	// (set during inference); empty = unassigned.
 	parent := setup.Parent
 	parent.ID = parentID
-	parent.Room = homeRoom
 	parent.AllowedUsers = []string{u.ID}
 	toSave = append(toSave, parent)
 

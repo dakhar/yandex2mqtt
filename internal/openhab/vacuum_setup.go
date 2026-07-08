@@ -57,10 +57,14 @@ func (c *Connector) VacuumSetups(ctx context.Context) ([]VacuumSetup, error) {
 func inferVacuums(items []ohItem) []VacuumSetup {
 	byName := make(map[string]ohItem, len(items))
 	children := map[string][]ohItem{}
+	locName := map[string]string{}
 	for _, it := range items {
 		byName[it.Name] = it
 		for _, g := range it.GroupNames {
 			children[g] = append(children[g], it)
+		}
+		if it.Type == "Group" && isLocation(it.Tags) {
+			locName[it.Name] = itemLabel(it)
 		}
 	}
 
@@ -89,6 +93,7 @@ func inferVacuums(items []ohItem) []VacuumSetup {
 		}
 		parent, _ := draftForGroup(it, children[it.Name])
 		parent.Type = "devices.types.vacuum_cleaner"
+		parent.Room = resolveRoom(it, byName, locName) // its Location ancestor
 		if opItem != "" {
 			addWholeHouseControls(&parent, opItem)
 		}

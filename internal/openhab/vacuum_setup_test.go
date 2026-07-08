@@ -10,7 +10,8 @@ import (
 func TestInferVacuums(t *testing.T) {
 	gm := func(parent string) []string { return []string{parent} }
 	items := []ohItem{
-		{Name: "VacuumCleaner", Type: "Group", Label: "Робот-пылесос", Tags: []string{"CleaningRobot"}},
+		{Name: "r_Home", Type: "Group", Label: "Дом", Tags: []string{"House"}},
+		{Name: "VacuumCleaner", Type: "Group", Label: "Робот-пылесос", Tags: []string{"CleaningRobot"}, GroupNames: gm("r_Home")},
 		{Name: "VacuumCleaner_Mapsegments", Type: "String", GroupNames: gm("VacuumCleaner"),
 			State: `{"1":"Alex","2":"Kitchen","10":"Hall"}`},
 		{Name: "VacuumCleaner_Cleansegments", Type: "String", GroupNames: gm("VacuumCleaner")},
@@ -40,8 +41,10 @@ func TestInferVacuums(t *testing.T) {
 	if !has["devices.capabilities.on_off"] || !has["devices.capabilities.toggle"] || !has["devices.capabilities.video_stream"] {
 		t.Fatalf("parent caps: %+v", s.Parent.Capabilities)
 	}
-	// The parent draft must validate and keep the equipment identity binding.
-	s.Parent.Room = "Дом"
+	// The parent's room comes from its openHAB Location ancestor.
+	if s.Parent.Room != "Дом" {
+		t.Fatalf("parent room = %q, want Дом (from r_Home Location)", s.Parent.Room)
+	}
 	if errs, _ := device.ValidateCatalog([]config.Device{s.Parent}); len(errs) > 0 {
 		t.Fatalf("parent invalid: %v", errs)
 	}
