@@ -94,6 +94,36 @@ func TestPlaylistRewrite(t *testing.T) {
 	}
 }
 
+// An upstream error page served at a .m3u8 URL must pass through unchanged, not
+// be mangled into a fake playlist of rewritten HTML lines.
+func TestHandlerPassesThroughNonPlaylist(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusNotFound)
+		io.WriteString(w, "<!doctype html><html><head></head></html>")
+	}))
+	defer upstream.Close()
+
+	p := New("secret", time.Hour, "")
+	r := chi.NewRouter()
+	r.HandleFunc("/stream/{token}", p.Handler())
+	front := httptest.NewServer(r)
+	defer front.Close()
+
+	resp, err := http.Get(front.URL + "/stream/" + p.sign(upstream.URL+"/dead.m3u8"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 passthrough", resp.StatusCode)
+	}
+	if !strings.HasPrefix(string(body), "<!doctype html>") {
+		t.Fatalf("body was mangled instead of passed through: %q", body)
+	}
+}
+
 // TestHandlerProxiesPlaylistAndSegment drives the full HTTP path: an upstream
 // serves a playlist referencing a segment; the handler rewrites the playlist,
 // and a follow-up request for the rewritten token streams the segment through

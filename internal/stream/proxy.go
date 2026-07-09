@@ -113,12 +113,23 @@ func (p *Proxy) Handler() http.HandlerFunc {
 				http.Error(w, "bad gateway", http.StatusBadGateway)
 				return
 			}
-			base, _ := url.Parse(raw)
-			out := p.rewritePlaylist(body, base)
-			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-			w.Header().Set("Cache-Control", "no-store")
+			// Only rewrite a genuine playlist. An upstream error (or an HTML error
+			// page served at a .m3u8 URL) must pass through untouched, not get
+			// mangled into a fake playlist of rewritten HTML lines.
+			if resp.StatusCode == http.StatusOK && looksLikePlaylist(body) {
+				base, _ := url.Parse(raw)
+				out := p.rewritePlaylist(body, base)
+				w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+				w.Header().Set("Cache-Control", "no-store")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(out)
+				return
+			}
+			if ct := resp.Header.Get("Content-Type"); ct != "" {
+				w.Header().Set("Content-Type", ct)
+			}
 			w.WriteHeader(resp.StatusCode)
-			_, _ = w.Write(out)
+			_, _ = w.Write(body)
 			return
 		}
 
@@ -232,6 +243,12 @@ func (p *Proxy) mac(b []byte) []byte {
 
 func enc(b []byte) string          { return base64.RawURLEncoding.EncodeToString(b) }
 func dec(s string) ([]byte, error) { return base64.RawURLEncoding.DecodeString(s) }
+
+// looksLikePlaylist reports whether a body is actually an HLS playlist (starts
+// with the #EXTM3U tag), guarding against error pages served at a .m3u8 URL.
+func looksLikePlaylist(body []byte) bool {
+	return strings.HasPrefix(strings.TrimSpace(string(body)), "#EXTM3U")
+}
 
 // isPlaylist reports whether a resource is an HLS playlist, by MIME then by the
 // .m3u8 extension.
