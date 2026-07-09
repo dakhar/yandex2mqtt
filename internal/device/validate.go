@@ -39,6 +39,13 @@ func ValidateCatalog(devs []config.Device) (errs, warns []error) {
 }
 
 func validateCapability(where string, c config.Capability) (errs, warns []error) {
+	// A constant/raw capability (parameters.__state present) is an experimental
+	// passthrough for capability types yandex2mqtt has no built-in handling of
+	// (e.g. undocumented planar_view / presence_zone): its type/instance aren't
+	// validated — it's declared and its fixed state reported verbatim.
+	if _, ok := c.Parameters["__state"]; ok {
+		return
+	}
 	if !capabilityTypes.has(c.Type) {
 		errs = append(errs, fmt.Errorf("%s: unknown capability type %q", where, c.Type))
 		return

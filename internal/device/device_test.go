@@ -1,10 +1,56 @@
 package device
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/dakhar/yandex2mqtt/internal/config"
 )
+
+// A constant/raw capability (parameters.__state) is declared verbatim on
+// discovery (type + params minus __state) and reports its fixed state on query —
+// used to try capability types yandex2mqtt has no built-in handling of.
+func TestConstantCapability(t *testing.T) {
+	stateVal := map[string]any{
+		"bounds":        map[string]any{"lower": map[string]any{"x": 0, "y": 0}, "upper": map[string]any{"x": 5000, "y": 5000}},
+		"grid":          map[string]any{"cell_size": 50},
+		"point_of_view": map[string]any{"origin": map[string]any{"x": 2500, "y": 2500}, "angle_deg": 90},
+	}
+	cfgDev := config.Device{
+		ID: "Vac", Type: "devices.types.vacuum_cleaner",
+		Capabilities: []config.Capability{{
+			Type:        "devices.capabilities.planar_view",
+			Retrievable: true,
+			Parameters:  map[string]any{"__state": map[string]any{"instance": "planar_view", "value": stateVal}},
+		}},
+	}
+	if errs, _ := ValidateCatalog([]config.Device{cfgDev}); len(errs) > 0 {
+		t.Fatalf("constant capability rejected by validation: %v", errs)
+	}
+
+	d := New(cfgDev, nil, nil)
+
+	def := d.Definition()
+	if len(def.Capabilities) != 1 {
+		t.Fatalf("discovery caps = %+v", def.Capabilities)
+	}
+	c := def.Capabilities[0]
+	if c.Type != "devices.capabilities.planar_view" || !c.Retrievable {
+		t.Fatalf("discovery cap = %+v", c)
+	}
+	if _, leaked := c.Parameters["__state"]; leaked {
+		t.Fatalf("__state leaked into discovery parameters: %+v", c.Parameters)
+	}
+
+	q := d.QueryState()
+	if len(q.Capabilities) != 1 || q.Capabilities[0].State == nil {
+		t.Fatalf("query caps = %+v", q.Capabilities)
+	}
+	st := q.Capabilities[0].State
+	if st.Instance != "planar_view" || !reflect.DeepEqual(st.Value, stateVal) {
+		t.Fatalf("query state = %+v", st)
+	}
+}
 
 func TestConvertToYandexValue(t *testing.T) {
 	tests := []struct {

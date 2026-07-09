@@ -105,12 +105,18 @@ func New(c config.Device, publish PublishFunc, log *slog.Logger) *Device {
 	}
 	d.invert = map[string]bool{}
 	for _, c := range c.Capabilities {
+		params, cur, retr := c.Parameters, initState(c.Type, c.Parameters), c.Retrievable
+		// A constant/raw capability carries its fixed state in parameters.__state;
+		// report it verbatim and hide __state from the discovery parameters.
+		if st, cleaned, ok := constState(c.Parameters); ok {
+			cur, params, retr = st, cleaned, true
+		}
 		d.capabilities = append(d.capabilities, &capState{
 			Type:        c.Type,
-			Retrievable: c.Retrievable,
+			Retrievable: retr,
 			Reportable:  c.Reportable,
-			Parameters:  c.Parameters,
-			cur:         initState(c.Type, c.Parameters),
+			Parameters:  params,
+			cur:         cur,
 		})
 		if c.Invert && actTypeOf(c.Type) == "range" {
 			if inst, _ := c.Parameters["instance"].(string); inst != "" {
@@ -129,6 +135,28 @@ func New(c config.Device, publish PublishFunc, log *slog.Logger) *Device {
 	}
 	d.buildBindings(c)
 	return d
+}
+
+// constState pulls a constant capability state out of a reserved "__state"
+// parameter: {"__state": {"instance": "...", "value": ...}}. It returns the
+// state, a copy of the parameters with "__state" removed (so it isn't sent to
+// Yandex on discovery), and whether one was present. This lets a device declare
+// a capability yandex2mqtt has no built-in handling for (experimental /
+// undocumented types like planar_view) and report a fixed state on query.
+func constState(params map[string]any) (*State, map[string]any, bool) {
+	raw, ok := params["__state"]
+	if !ok {
+		return nil, params, false
+	}
+	m, _ := raw.(map[string]any)
+	inst, _ := m["instance"].(string)
+	cleaned := make(map[string]any, len(params))
+	for k, v := range params {
+		if k != "__state" {
+			cleaned[k] = v
+		}
+	}
+	return &State{Instance: inst, Value: m["value"]}, cleaned, true
 }
 
 // initState builds the initial state for a capability/property. Port of
