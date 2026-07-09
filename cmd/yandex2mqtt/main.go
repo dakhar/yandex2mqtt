@@ -253,7 +253,7 @@ func run() error {
 	root.With(sessions.RequireAdmin).Post("/app/users/{id}/delete", sessions.DeleteUser)
 
 	// Public, tokenized HLS proxy (no login: Alice's player calls it directly).
-	root.HandleFunc("/stream/{token}", streamProxy.Handler())
+	root.HandleFunc("/stream/{name}", streamProxy.Handler())
 
 	root.Mount("/provider", api.Routes())
 

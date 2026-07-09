@@ -18,8 +18,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/go-chi/chi/v5"
 )
 
 // corsOrigin is the origin Alice's HLS player runs on; it must be allowed or the
@@ -71,11 +69,17 @@ func (p *Proxy) PublicURL(r *http.Request, rawURL string) string {
 		}
 		base = scheme + "://" + host
 	}
-	return base + "/stream/" + p.sign(rawURL)
+	// The URL must look like an HLS playlist (end in .m3u8) — Yandex's player
+	// keys off the extension and won't fetch an extension-less URL. The signed
+	// token rides in the query string, mirroring Yandex's own example
+	// (…/playlist.m3u8?token=…).
+	return base + "/stream/index.m3u8?t=" + p.sign(rawURL)
 }
 
-// Handler serves GET/OPTIONS /stream/{token}: it verifies the token, fetches the
-// upstream resource, and either rewrites it (playlist) or streams it (segment).
+// Handler serves GET/OPTIONS /stream/{name}?t=<token>: it verifies the token,
+// fetches the upstream resource, and either rewrites it (playlist) or streams it
+// (segment). The path name (index.m3u8 / s.ts) is cosmetic — it only exists so
+// the URL carries an HLS-looking extension for the player.
 func (p *Proxy) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", corsOrigin)
@@ -86,7 +90,7 @@ func (p *Proxy) Handler() http.HandlerFunc {
 			return
 		}
 
-		raw, ok := p.verify(chi.URLParam(r, "token"))
+		raw, ok := p.verify(r.URL.Query().Get("t"))
 		if !ok {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
@@ -190,13 +194,27 @@ func (p *Proxy) rewriteTagURI(line string, base *url.URL) string {
 }
 
 // signResolved resolves a (possibly relative) URI against base and returns a
-// signed token; on parse failure it returns the URI unchanged.
+// proxied relative reference "<name>?t=<token>", where name carries an
+// extension matching the target (p.m3u8 for sub-playlists, s.ts otherwise) so
+// each hop still looks like an HLS resource. On parse failure it returns the URI
+// unchanged. The reference is relative and resolves against the playlist's own
+// /stream/... path on the client.
 func (p *Proxy) signResolved(uri string, base *url.URL) string {
 	ref, err := url.Parse(uri)
 	if err != nil {
 		return uri
 	}
-	return p.sign(base.ResolveReference(ref).String())
+	abs := base.ResolveReference(ref).String()
+	return proxiedName(abs) + "?t=" + p.sign(abs)
+}
+
+// proxiedName returns the extension-carrying path segment for a proxied URI: a
+// sub-playlist keeps .m3u8, everything else is treated as a segment (.ts).
+func proxiedName(rawURL string) string {
+	if strings.HasSuffix(pathOf(rawURL), ".m3u8") {
+		return "p.m3u8"
+	}
+	return "s.ts"
 }
 
 // sign returns "payload.sig", both base64url, where payload is "<exp>|<url>".
