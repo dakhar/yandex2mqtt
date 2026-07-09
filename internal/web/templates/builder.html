@@ -100,7 +100,7 @@
 
 <script>
 let SCHEMA = null;
-let GO2RTC = [];   // go2rtc streams [{name,url}] for the video_stream picker
+let RELAYS = [];   // camera-relay streams [{name,url,relay}] for the video_stream picker
 const capIndex = { cap: 0, prop: 0 };
 const EDIT_ID = "{{.EditID}}";
 
@@ -146,10 +146,14 @@ function populateOHItems(items) {
 Promise.all([
   fetch('/app/schema').then(r => r.json()),
   fetch('/app/openhab/items').then(r => r.json()).catch(() => []),
-  fetch('/app/go2rtc/streams').then(r => r.json()).catch(() => [])
-]).then(([s, items, g2]) => {
+  fetch('/app/go2rtc/streams').then(r => r.json()).catch(() => []),
+  fetch('/app/mediamtx/streams').then(r => r.json()).catch(() => [])
+]).then(([s, items, g2, mtx]) => {
   SCHEMA = s;
-  GO2RTC = Array.isArray(g2) ? g2 : [];
+  RELAYS = [
+    ...(Array.isArray(g2) ? g2 : []).map(x => ({ ...x, relay: 'go2rtc' })),
+    ...(Array.isArray(mtx) ? mtx : []).map(x => ({ ...x, relay: 'mediamtx' })),
+  ];
   populateOHItems(items);
   const typeSel = document.getElementById('type');
   s.device_types.forEach(t => typeSel.add(new Option(lbl('device_types', t), t)));
@@ -181,11 +185,11 @@ function refreshRowOpts(rowId) {
 
 function onItemChange(rowId, el) { markItem(el); refreshRowOpts(rowId); }
 
-// pickGo2rtc fills a video_stream row's source with the chosen go2rtc HLS URL and
-// forces protocol=hls. It writes both the openHAB-item and MQTT-state fields so
-// the URL survives a later transport switch (the backend uses only the one that
-// matches the device's transport).
-function pickGo2rtc(rowId, sel) {
+// pickRelay fills a video_stream row's source with the chosen relay HLS URL
+// (go2rtc or mediamtx) and forces protocol=hls. It writes both the openHAB-item
+// and MQTT-state fields so the URL survives a later transport switch (the backend
+// uses only the one that matches the device's transport).
+function pickRelay(rowId, sel) {
   const url = sel.value;
   if (!url) return;
   const row = document.getElementById(rowId);
@@ -305,11 +309,11 @@ function renderParams(rowId, data) {
       <option value="hls"${proto === 'hls' ? ' selected' : ''}>HLS (.m3u8, со звуком)</option>
       <option value="mjpeg"${proto === 'mjpeg' ? ' selected' : ''}>MJPEG (ниже задержка, без звука)</option>
     </select></div>`;
-    if (GO2RTC.length) {
-      html += `<div><label>go2rtc поток</label><select class="f-go2rtc" onchange="pickGo2rtc('${rowId}', this)">
-        <option value="">— выбрать поток go2rtc —</option>
-        ${GO2RTC.map(s => `<option value="${attr(s.url)}">${attr(s.name)}</option>`).join('')}
-      </select><span class="hint">Выбор подставит HLS-URL go2rtc (стабильный, низкая задержка) в поле источника ниже и переключит протокол на HLS.</span></div>`;
+    if (RELAYS.length) {
+      html += `<div><label>Поток релея (go2rtc / mediamtx)</label><select class="f-relay" onchange="pickRelay('${rowId}', this)">
+        <option value="">— выбрать поток релея —</option>
+        ${RELAYS.map(s => `<option value="${attr(s.url)}">${attr(s.name)} — ${attr(s.relay)}</option>`).join('')}
+      </select><span class="hint">Выбор подставит HLS-URL релея в поле источника ниже и переключит протокол на HLS. mediamtx стабильнее для плеера Алисы (нормальное окно HLS).</span></div>`;
     }
     html += `<div class="hint">Впиши <b>URL потока</b> напрямую или item/топик, где он хранится (для камер с меняющимся токеном). <b>HLS</b>: <code>https://…/playlist.m3u8</code> (<code>application/vnd.apple.mpegurl</code>). <b>MJPEG</b>: <code>multipart/x-mixed-replace</code> — задержка ниже, но без звука. openHAB item может отдавать относительный путь (<code>/ipcamera/…</code>) — он резолвится к адресу сервера openHAB. Умение не запрашивается и не репортится.</div>`;
   }

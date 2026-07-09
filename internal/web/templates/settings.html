@@ -37,6 +37,12 @@
       </div>
       <div class="hint">Релей камер go2rtc: включает выбор потока в конструкторе устройств (карточка «видеопоток»). Пусто = выключено.</div>
       <div class="hint">Keepalive: сколько держать HLS-сессию go2rtc «тёплой» после последнего запроса плеера — перекрывает паузы плеера и 5-сек таймаут go2rtc, убирая обрывы. 0 = выключить.</div>
+      <h3>mediamtx</h3>
+      <div class="grid2">
+        <div><label class="fl">API URL</label><input type="text" name="mediamtx_api_url" value="{{.MediamtxAPIURL}}" placeholder="http://127.0.0.1:9997"></div>
+        <div><label class="fl">HLS URL</label><input type="text" name="mediamtx_hls_url" value="{{.MediamtxHLSURL}}" placeholder="http://127.0.0.1:8888"></div>
+      </div>
+      <div class="hint">Релей mediamtx (стандартный HLS с нормальным окном — стабильнее go2rtc для плеера Алисы): API-URL — для списка потоков в конструкторе, HLS-URL — для самого потока. Оба пусто = выключено.</div>
       <div class="hint">Пароль/токен оставь пустыми, чтобы не менять. Секреты хранятся в БД.</div>
       <button type="submit" class="btn btn-imp" style="margin-top:10px"
               onsubmit="return true">Сохранить и переподключить</button>

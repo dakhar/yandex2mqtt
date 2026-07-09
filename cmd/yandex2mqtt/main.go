@@ -25,6 +25,7 @@ import (
 	"github.com/dakhar/yandex2mqtt/internal/device"
 	"github.com/dakhar/yandex2mqtt/internal/go2rtc"
 	"github.com/dakhar/yandex2mqtt/internal/httplog"
+	"github.com/dakhar/yandex2mqtt/internal/mediamtx"
 	"github.com/dakhar/yandex2mqtt/internal/mqtt"
 	"github.com/dakhar/yandex2mqtt/internal/openhab"
 	"github.com/dakhar/yandex2mqtt/internal/store"
@@ -132,8 +133,9 @@ func run() error {
 	// UI) overrides it. Keep the env values so a cleared DB value falls back.
 	configRepo := store.NewConfigRepo(db)
 	envMQTT, envOpenHAB := cfg.MQTT, cfg.OpenHAB
+	envGo2RTC, envMediamtx := cfg.Go2RTC, cfg.Mediamtx
 	if all, err := configRepo.All(ctx0); err == nil {
-		overlayServerCfg(&cfg.MQTT, &cfg.OpenHAB, &cfg.Go2RTC, all)
+		overlayServerCfg(&cfg.MQTT, &cfg.OpenHAB, &cfg.Go2RTC, &cfg.Mediamtx, all)
 	}
 
 	// Yandex state-change notifier (nil when not configured).
@@ -188,6 +190,8 @@ func run() error {
 	// changed at runtime via the settings page (see the apply hook below).
 	go2rtcClient := go2rtc.New(cfg.Go2RTC.URL)
 	board.SetGo2RTC(go2rtcClient)
+	mediamtxClient := mediamtx.New(cfg.Mediamtx.APIURL, cfg.Mediamtx.HLSURL)
+	board.SetMediamtx(mediamtxClient)
 	if notifier != nil {
 		// After a catalog change, ask Yandex to re-discover the user's devices.
 		board.SetDiscoveryNotifier(notifier.NotifyDiscovery)
@@ -195,21 +199,22 @@ func run() error {
 
 	// Admin-editable server config: effective values (env overlaid with DB) for
 	// display, and an apply hook that reconnects MQTT/openHAB at runtime.
-	effective := func() (config.MQTT, config.OpenHAB, config.Go2RTC) {
-		m, o, g := envMQTT, envOpenHAB, cfg.Go2RTC
+	effective := func() (config.MQTT, config.OpenHAB, config.Go2RTC, config.Mediamtx) {
+		m, o, g, mtx := envMQTT, envOpenHAB, envGo2RTC, envMediamtx
 		if all, err := configRepo.All(ctx0); err == nil {
-			overlayServerCfg(&m, &o, &g, all)
+			overlayServerCfg(&m, &o, &g, &mtx, all)
 		}
-		return m, o, g
+		return m, o, g, mtx
 	}
 	board.SetServerConfig(configRepo, effective, func() error {
-		m, o, g := effective()
+		m, o, g, mtx := effective()
 		if err := bridge.Reconfigure(m); err != nil {
 			return err
 		}
 		ohConn.Reconfigure(o)
 		go2rtcClient.SetBase(g.URL)
 		streamProxy.SetKeepaliveMax(time.Duration(g.KeepaliveSec) * time.Second)
+		mediamtxClient.SetBases(mtx.APIURL, mtx.HLSURL)
 		return nil
 	})
 
@@ -247,6 +252,7 @@ func run() error {
 	root.With(sessions.RequireLogin).Post("/app/settings/servers", board.ServerConfig)
 	root.With(sessions.RequireLogin).Get("/app/openhab/items", board.OpenHABItems)
 	root.With(sessions.RequireLogin).Get("/app/go2rtc/streams", board.Go2RTCStreams)
+	root.With(sessions.RequireLogin).Get("/app/mediamtx/streams", board.MediamtxStreams)
 	root.With(sessions.RequireLogin).Get("/app/discover/vacuum", board.VacuumSetupPage)
 	root.With(sessions.RequireLogin).Post("/app/discover/vacuum", board.CreateVacuum)
 	root.With(sessions.RequireLogin).Get("/app/discover", board.Discover)
@@ -299,7 +305,7 @@ func run() error {
 
 // overlayServerCfg applies non-empty app_config values over the env-derived MQTT
 // and openHAB config. Empty/absent keys keep the env value.
-func overlayServerCfg(m *config.MQTT, o *config.OpenHAB, g *config.Go2RTC, all map[string]string) {
+func overlayServerCfg(m *config.MQTT, o *config.OpenHAB, g *config.Go2RTC, mtx *config.Mediamtx, all map[string]string) {
 	if v := all[store.CfgMQTTHost]; v != "" {
 		m.Host = v
 	}
@@ -327,6 +333,12 @@ func overlayServerCfg(m *config.MQTT, o *config.OpenHAB, g *config.Go2RTC, all m
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			g.KeepaliveSec = n
 		}
+	}
+	if v := all[store.CfgMediamtxAPI]; v != "" {
+		mtx.APIURL = v
+	}
+	if v := all[store.CfgMediamtxHLS]; v != "" {
+		mtx.HLSURL = v
 	}
 }
 

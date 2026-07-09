@@ -41,12 +41,13 @@ type Handlers struct {
 	discoverer  Discoverer // nil when openHAB isn't configured
 	settings    *store.SettingsRepo
 	ignore      *store.IgnoreRepo
-	go2rtc      go2rtcLister // nil when go2rtc isn't configured
+	go2rtc      streamLister   // nil when go2rtc isn't configured
+	mediamtx    streamLister   // nil when mediamtx isn't configured
 	onDiscovery func(userID string) // notify Yandex the device list changed (nil = off)
 
-	// Admin-editable server (MQTT/openHAB/go2rtc) connection config.
+	// Admin-editable server (MQTT/openHAB/go2rtc/mediamtx) connection config.
 	configRepo   *store.ConfigRepo
-	effectiveCfg func() (config.MQTT, config.OpenHAB, config.Go2RTC)
+	effectiveCfg func() (config.MQTT, config.OpenHAB, config.Go2RTC, config.Mediamtx)
 	applyServer  func() error
 
 	log *slog.Logger
@@ -56,20 +57,23 @@ type Handlers struct {
 // Yandex re-syncs the device list (Notification API /callback/discovery).
 func (h *Handlers) SetDiscoveryNotifier(f func(userID string)) { h.onDiscovery = f }
 
-// go2rtcLister lists a go2rtc instance's streams and builds their HLS URL (see
-// internal/go2rtc). Satisfied by *go2rtc.Client.
-type go2rtcLister interface {
+// streamLister lists a camera relay's streams and builds their HLS URL.
+// Satisfied by *go2rtc.Client and *mediamtx.Client.
+type streamLister interface {
 	Streams(ctx context.Context) ([]string, error)
 	StreamURL(name string) string
 }
 
 // SetGo2RTC wires the go2rtc stream lister for the builder's camera picker.
-func (h *Handlers) SetGo2RTC(g go2rtcLister) { h.go2rtc = g }
+func (h *Handlers) SetGo2RTC(g streamLister) { h.go2rtc = g }
+
+// SetMediamtx wires the mediamtx stream lister for the builder's camera picker.
+func (h *Handlers) SetMediamtx(m streamLister) { h.mediamtx = m }
 
 // SetServerConfig wires the admin server-config editor: the repo to persist to,
 // an accessor for the effective (env+DB) config, and an apply hook that
 // reconnects MQTT/openHAB.
-func (h *Handlers) SetServerConfig(cr *store.ConfigRepo, effective func() (config.MQTT, config.OpenHAB, config.Go2RTC), apply func() error) {
+func (h *Handlers) SetServerConfig(cr *store.ConfigRepo, effective func() (config.MQTT, config.OpenHAB, config.Go2RTC, config.Mediamtx), apply func() error) {
 	h.configRepo = cr
 	h.effectiveCfg = effective
 	h.applyServer = apply

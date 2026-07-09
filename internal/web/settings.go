@@ -62,7 +62,7 @@ func (h *Handlers) Settings(w http.ResponseWriter, r *http.Request) {
 	}
 	// Admin-only server (MQTT/openHAB) connection config, with secrets masked.
 	if u.IsAdmin && h.effectiveCfg != nil {
-		m, o, g := h.effectiveCfg()
+		m, o, g, mtx := h.effectiveCfg()
 		data["ShowServers"] = true
 		data["MQTTHost"] = m.Host
 		data["MQTTPort"] = m.Port
@@ -72,6 +72,8 @@ func (h *Handlers) Settings(w http.ResponseWriter, r *http.Request) {
 		data["OHHasToken"] = o.Token != ""
 		data["Go2RTCURL"] = g.URL
 		data["Go2RTCKeepalive"] = g.KeepaliveSec
+		data["MediamtxAPIURL"] = mtx.APIURL
+		data["MediamtxHLSURL"] = mtx.HLSURL
 	}
 	h.render(w, "settings.html", data)
 }
@@ -94,6 +96,8 @@ func (h *Handlers) ServerConfig(w http.ResponseWriter, r *http.Request) {
 	set(store.CfgOpenHABURL, strings.TrimSpace(r.PostFormValue("openhab_url")))
 	set(store.CfgGo2RTCURL, strings.TrimSpace(r.PostFormValue("go2rtc_url")))
 	set(store.CfgGo2RTCKeep, strings.TrimSpace(r.PostFormValue("go2rtc_keepalive")))
+	set(store.CfgMediamtxAPI, strings.TrimSpace(r.PostFormValue("mediamtx_api_url")))
+	set(store.CfgMediamtxHLS, strings.TrimSpace(r.PostFormValue("mediamtx_hls_url")))
 	// Secrets: only overwrite when a new value is supplied (blank = keep current).
 	if v := r.PostFormValue("mqtt_password"); v != "" {
 		set(store.CfgMQTTPassword, v)

@@ -36,25 +36,35 @@ func (h *Handlers) OpenHABItems(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(items)
 }
 
-// Go2RTCStreams returns the go2rtc streams as [{name,url}] for the builder's
-// video_stream picker (GET /app/go2rtc/streams); url is the HLS URL to store in
-// the capability. Empty list when go2rtc is absent or unreachable — the builder
-// just hides the picker and the user types a URL as before.
-func (h *Handlers) Go2RTCStreams(w http.ResponseWriter, r *http.Request) {
+// relayStreams writes a camera relay's streams as [{name,url}] for the builder's
+// video_stream picker; url is the HLS URL to store in the capability. Empty list
+// when the relay is absent or unreachable — the builder just hides that group
+// and the user types a URL as before.
+func relayStreams(w http.ResponseWriter, ctx context.Context, l streamLister) {
 	type stream struct {
 		Name string `json:"name"`
 		URL  string `json:"url"`
 	}
 	out := []stream{}
-	if h.go2rtc != nil {
-		if names, err := h.go2rtc.Streams(r.Context()); err == nil {
+	if l != nil {
+		if names, err := l.Streams(ctx); err == nil {
 			for _, n := range names {
-				out = append(out, stream{Name: n, URL: h.go2rtc.StreamURL(n)})
+				out = append(out, stream{Name: n, URL: l.StreamURL(n)})
 			}
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+// Go2RTCStreams serves the go2rtc relay's streams (GET /app/go2rtc/streams).
+func (h *Handlers) Go2RTCStreams(w http.ResponseWriter, r *http.Request) {
+	relayStreams(w, r.Context(), h.go2rtc)
+}
+
+// MediamtxStreams serves the mediamtx relay's streams (GET /app/mediamtx/streams).
+func (h *Handlers) MediamtxStreams(w http.ResponseWriter, r *http.Request) {
+	relayStreams(w, r.Context(), h.mediamtx)
 }
 
 // defaultDiscoveryTag is the initial per-user openHAB discovery filter. Users

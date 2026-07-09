@@ -22,9 +22,10 @@ type Config struct {
 	Session Session
 	Admin   Admin
 	OAuth   OAuthClient
-	Yandex  Yandex
-	OpenHAB OpenHAB
-	Go2RTC  Go2RTC
+	Yandex   Yandex
+	OpenHAB  OpenHAB
+	Go2RTC   Go2RTC
+	Mediamtx Mediamtx
 
 	DBPath      string `env:"DB_PATH" envDefault:"./data/yandex2mqtt.db"`
 	DevicesFile string `env:"DEVICES_FILE" envDefault:"./data/devices.yaml"`
@@ -67,6 +68,16 @@ type Go2RTC struct {
 	// HLS session warm after the player's last request, to bridge the player's
 	// fetch gaps past go2rtc's hardcoded 5s session timeout. 0 disables it.
 	KeepaliveSec int `env:"GO2RTC_KEEPALIVE_SEC" envDefault:"30"`
+}
+
+// Mediamtx points at a mediamtx instance (github.com/bluenviron/mediamtx) used
+// as a camera relay that serves standard HLS (a proper multi-segment window,
+// unlike go2rtc's 2-segment low-latency HLS). APIURL lists configured paths for
+// the builder picker; HLSURL is the base the video_stream proxy fetches. Both
+// are internal (loopback) URLs reachable from this process; empty disables it.
+type Mediamtx struct {
+	APIURL string `env:"MEDIAMTX_API_URL"`
+	HLSURL string `env:"MEDIAMTX_HLS_URL"`
 }
 
 // Session holds the cookie session secret (replaces the hardcoded value).
