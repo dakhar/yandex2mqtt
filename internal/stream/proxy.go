@@ -23,23 +23,18 @@ import (
 	"github.com/dakhar/yandex2mqtt/internal/httplog"
 )
 
-// corsOrigin is the fallback Access-Control-Allow-Origin when a request carries
-// no Origin header; normally we echo the request's Origin (see allowedOrigin).
-const corsOrigin = "https://yastatic.net"
-
-// allowedOrigin returns the value for Access-Control-Allow-Origin: the request's
-// own Origin, echoed back. Alice's player (hls.js) fetches the manifest and
-// segments in CORS mode from a Yandex origin that varies (observed
-// https://yandex.ru — NOT the documented yastatic.net), and the browser blocks
-// hls.js from reading the response unless this header matches the requesting
-// origin exactly. Access is gated by the signed short-lived token, so reflecting
-// the origin is safe. Falls back to corsOrigin when Origin is absent.
-func allowedOrigin(r *http.Request) string {
-	if o := r.Header.Get("Origin"); o != "" {
-		return o
-	}
-	return corsOrigin
-}
+// corsAnyOrigin allows any origin to read a proxied stream. This is safe and NOT
+// a same-origin-policy hole: access is gated by the signed short-lived token (no
+// valid token -> 403); the resource carries no cookies/credentials (we never send
+// Access-Control-Allow-Credentials); and a token holder could fetch it
+// server-side regardless of CORS — so Origin is not a security boundary here.
+// "*" is chosen over echoing the request Origin deliberately: it is structurally
+// immune to the reflect-Origin+credentials escalation (browsers forbid "*" with
+// credentials) and covers the varying / "null" origins Alice's in-app WebView
+// player uses. hls.js fetches in CORS mode with withCredentials=false, so "*"
+// works (the earlier hardcoded https://yastatic.net did not match the player's
+// real Origin, https://yandex.ru, and the browser blocked playback).
+const corsAnyOrigin = "*"
 
 const (
 	maxPlaylist  = 2 << 20 // cap a rewritten playlist at 2 MiB
@@ -126,8 +121,7 @@ func (p *Proxy) PublicURL(r *http.Request, rawURL, protocol string) string {
 // the URL carries an HLS-looking extension for the player.
 func (p *Proxy) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin(r))
-		w.Header().Set("Vary", "Origin")
+		w.Header().Set("Access-Control-Allow-Origin", corsAnyOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Range")
 		if r.Method == http.MethodOptions {

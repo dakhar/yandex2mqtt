@@ -176,7 +176,7 @@ func TestHandlerProxiesPlaylistAndSegment(t *testing.T) {
 	if got := resp.Header.Get("Content-Type"); got != "application/vnd.apple.mpegurl" {
 		t.Fatalf("playlist MIME=%q", got)
 	}
-	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != corsOrigin {
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != corsAnyOrigin {
 		t.Fatalf("playlist CORS=%q", got)
 	}
 
@@ -204,7 +204,7 @@ func TestHandlerProxiesPlaylistAndSegment(t *testing.T) {
 	if got := segResp.Header.Get("Content-Type"); got != "video/MP2T" {
 		t.Fatalf("segment MIME=%q", got)
 	}
-	if got := segResp.Header.Get("Access-Control-Allow-Origin"); got != corsOrigin {
+	if got := segResp.Header.Get("Access-Control-Allow-Origin"); got != corsAnyOrigin {
 		t.Fatalf("segment CORS=%q", got)
 	}
 }
@@ -237,7 +237,7 @@ func TestHandlerStreamsMJPEG(t *testing.T) {
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "multipart/x-mixed-replace") {
 		t.Fatalf("mjpeg content-type = %q", ct)
 	}
-	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != corsOrigin {
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != corsAnyOrigin {
 		t.Fatalf("mjpeg CORS = %q", got)
 	}
 	if !strings.Contains(string(body), "JPEGDATA") {
@@ -245,11 +245,11 @@ func TestHandlerStreamsMJPEG(t *testing.T) {
 	}
 }
 
-// The CORS Access-Control-Allow-Origin must ECHO the request's Origin: Alice's
-// hls.js fetches the manifest in CORS mode from a Yandex origin that varies
-// (observed https://yandex.ru), and a mismatched header makes the browser block
-// it from reading the response — video never starts.
-func TestHandlerEchoesOrigin(t *testing.T) {
+// CORS allows any origin ("*"): Alice's hls.js fetches the manifest/segments in
+// CORS mode from a Yandex origin that varies (observed https://yandex.ru), so a
+// fixed origin blocks playback. Access is gated by the token, not by Origin, and
+// "*" can't be paired with credentials, so it's not a same-origin-policy hole.
+func TestHandlerAllowsAnyOrigin(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-mpegURL")
 		io.WriteString(w, "#EXTM3U\n#EXTINF:2.0,\nseg0.ts\n")
@@ -263,16 +263,13 @@ func TestHandlerEchoesOrigin(t *testing.T) {
 	defer front.Close()
 
 	req, _ := http.NewRequest(http.MethodGet, front.URL+"/stream/index.m3u8?token="+p.sign(upstream.URL+"/index.m3u8"), nil)
-	req.Header.Set("Origin", "https://yandex.ru")
+	req.Header.Set("Origin", "https://any.example") // arbitrary origin
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://yandex.ru" {
-		t.Fatalf("ACAO = %q, want echoed https://yandex.ru", got)
-	}
-	if got := resp.Header.Get("Vary"); got != "Origin" {
-		t.Fatalf("Vary = %q", got)
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("ACAO = %q, want * (any origin, token-gated)", got)
 	}
 }
