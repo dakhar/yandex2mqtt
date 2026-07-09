@@ -63,6 +63,10 @@ type Web struct {
 // reachable from this process; empty disables the builder's go2rtc stream picker.
 type Go2RTC struct {
 	URL string `env:"GO2RTC_URL"`
+	// KeepaliveSec is how long (seconds) the video_stream proxy keeps a go2rtc
+	// HLS session warm after the player's last request, to bridge the player's
+	// fetch gaps past go2rtc's hardcoded 5s session timeout. 0 disables it.
+	KeepaliveSec int `env:"GO2RTC_KEEPALIVE_SEC" envDefault:"30"`
 }
 
 // Session holds the cookie session secret (replaces the hardcoded value).

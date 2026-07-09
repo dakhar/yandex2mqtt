@@ -178,6 +178,7 @@ func run() error {
 	// no transcoding on our side.
 	streamProxy := stream.New(cfg.Session.Secret, time.Hour, cfg.Web.PublicURL)
 	streamProxy.SetLogger(logger)
+	streamProxy.SetKeepaliveMax(time.Duration(cfg.Go2RTC.KeepaliveSec) * time.Second)
 	api.SetStreamRewriter(streamProxy.PublicURL)
 
 	board := web.New(store.NewRoomRepo(db), catalog, manager, logger)
@@ -208,6 +209,7 @@ func run() error {
 		}
 		ohConn.Reconfigure(o)
 		go2rtcClient.SetBase(g.URL)
+		streamProxy.SetKeepaliveMax(time.Duration(g.KeepaliveSec) * time.Second)
 		return nil
 	})
 
@@ -320,6 +322,11 @@ func overlayServerCfg(m *config.MQTT, o *config.OpenHAB, g *config.Go2RTC, all m
 	}
 	if v := all[store.CfgGo2RTCURL]; v != "" {
 		g.URL = v
+	}
+	if v := all[store.CfgGo2RTCKeep]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			g.KeepaliveSec = n
+		}
 	}
 }
 

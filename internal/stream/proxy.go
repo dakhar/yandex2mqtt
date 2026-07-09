@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dakhar/yandex2mqtt/internal/httplog"
@@ -51,6 +52,12 @@ type Proxy struct {
 	// so it has no total timeout — the inbound request's context bounds its life.
 	streamClient *http.Client
 	log          *slog.Logger
+
+	// go2rtc HLS session keepalive (see keepAlive). mu guards sessions and
+	// keepaliveMax; keepaliveMax<=0 disables the feature.
+	mu           sync.Mutex
+	sessions     map[string]*hlsSession
+	keepaliveMax time.Duration
 }
 
 // New builds a Proxy. secret keys the HMAC that authenticates tokens (reuse the
@@ -66,7 +73,131 @@ func New(secret string, ttl time.Duration, base string) *Proxy {
 		client:       &http.Client{Timeout: fetchTimeout},
 		streamClient: &http.Client{}, // no total timeout: MJPEG streams forever
 		log:          slog.Default(),
+		sessions:     map[string]*hlsSession{},
+		keepaliveMax: 30 * time.Second, // default; overridable via SetKeepaliveMax
 	}
+}
+
+// SetKeepaliveMax sets how long a go2rtc HLS session is kept warm after the
+// player's last request (0 disables the keepalive). Safe to call at runtime.
+func (p *Proxy) SetKeepaliveMax(d time.Duration) {
+	p.mu.Lock()
+	p.keepaliveMax = d
+	p.mu.Unlock()
+}
+
+// --- go2rtc HLS session keepalive ---
+//
+// go2rtc drops an HLS session (its ?id=) after 5s with no segment request
+// (hardcoded). Alice's player fetches in bursts, so during a pause the session
+// dies and the next fetch 404s -> the player reloads and stutters. While a
+// session is being watched, we ping one of its segments every few seconds to
+// reset go2rtc's timer, keeping it alive across the player's gaps. A session is
+// dropped once the player stops fetching it for keepaliveMax.
+
+const maxKeepaliveSessions = 32 // cap concurrent keepalive goroutines
+
+// keepalivePing is the ping cadence, kept below go2rtc's 5s session timeout. A
+// var (not const) only so tests can shrink it.
+var keepalivePing = 3 * time.Second
+
+type hlsSession struct {
+	variantURL string // go2rtc variant playlist to ping (…/hls/playlist.m3u8?id=X)
+	lastSeen   time.Time
+}
+
+// sessionID returns a go2rtc HLS session id (the "id" query param) from an
+// upstream URL, or "" for a non-go2rtc/master/MJPEG URL that has none.
+func sessionID(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return u.Query().Get("id")
+}
+
+// touchSession refreshes a go2rtc HLS session's keepalive; given a variant URL
+// (from a variant-playlist fetch) it starts one if absent. A no-op when the
+// URL carries no session id or the keepalive is disabled.
+func (p *Proxy) touchSession(rawURL, variantURL string) {
+	id := sessionID(rawURL)
+	if id == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.keepaliveMax <= 0 {
+		return
+	}
+	if s := p.sessions[id]; s != nil {
+		s.lastSeen = time.Now()
+		if variantURL != "" {
+			s.variantURL = variantURL
+		}
+		return
+	}
+	if variantURL == "" || len(p.sessions) >= maxKeepaliveSessions {
+		return
+	}
+	p.sessions[id] = &hlsSession{variantURL: variantURL, lastSeen: time.Now()}
+	go p.keepAlive(id)
+}
+
+// keepAlive pings the session's latest segment every keepalivePing until the
+// player has been silent for keepaliveMax, then removes it.
+func (p *Proxy) keepAlive(id string) {
+	t := time.NewTicker(keepalivePing)
+	defer t.Stop()
+	for range t.C {
+		p.mu.Lock()
+		s := p.sessions[id]
+		if s == nil || p.keepaliveMax <= 0 || time.Since(s.lastSeen) > p.keepaliveMax {
+			delete(p.sessions, id)
+			p.mu.Unlock()
+			p.log.Debug("stream: keepalive stopped", "id", id)
+			return
+		}
+		variantURL := s.variantURL
+		p.mu.Unlock()
+		p.pingSession(variantURL)
+	}
+}
+
+// pingSession fetches the variant playlist and its latest segment, which resets
+// go2rtc's inactivity timer for the session. Best-effort; errors are ignored.
+func (p *Proxy) pingSession(variantURL string) {
+	base, err := url.Parse(variantURL)
+	if err != nil {
+		return
+	}
+	resp, err := p.client.Get(variantURL)
+	if err != nil {
+		return
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxPlaylist))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+	var seg string
+	for _, line := range strings.Split(string(body), "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			seg = line
+		}
+	}
+	if seg == "" {
+		return
+	}
+	ref, err := url.Parse(seg)
+	if err != nil {
+		return
+	}
+	segResp, err := p.client.Get(base.ResolveReference(ref).String())
+	if err != nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(segResp.Body, 4<<20))
+	segResp.Body.Close()
 }
 
 // SetLogger routes the proxy's diagnostic logs to the app logger. A nil logger
@@ -200,6 +331,8 @@ func (p *Proxy) Handler() http.HandlerFunc {
 			if resp.StatusCode == http.StatusOK && looksLikePlaylist(body) {
 				base, _ := url.Parse(raw)
 				out := p.rewritePlaylist(body, base)
+				// A go2rtc variant playlist carries a session ?id=; keep it warm.
+				p.touchSession(raw, raw)
 				w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 				w.Header().Set("Cache-Control", "no-store")
 				w.WriteHeader(http.StatusOK)
@@ -213,6 +346,9 @@ func (p *Proxy) Handler() http.HandlerFunc {
 			_, _ = w.Write(body)
 			return
 		}
+
+		// A segment fetch keeps its go2rtc session alive too — refresh the timer.
+		p.touchSession(raw, "")
 
 		ct := resp.Header.Get("Content-Type")
 		if ct == "" {

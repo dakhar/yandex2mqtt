@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -206,6 +207,58 @@ func TestHandlerProxiesPlaylistAndSegment(t *testing.T) {
 	}
 	if got := segResp.Header.Get("Access-Control-Allow-Origin"); got != corsAnyOrigin {
 		t.Fatalf("segment CORS=%q", got)
+	}
+}
+
+// TestKeepAlivePingsThenExpires verifies the go2rtc HLS session keepalive: while
+// a session is registered the proxy pings its segments (resetting go2rtc's 5s
+// timer), and after keepaliveMax with no player activity the session is dropped.
+func TestKeepAlivePingsThenExpires(t *testing.T) {
+	oldPing := keepalivePing
+	keepalivePing = 15 * time.Millisecond
+	defer func() { keepalivePing = oldPing }()
+
+	var segFetches int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "segment") {
+			atomic.AddInt32(&segFetches, 1)
+			io.WriteString(w, "TS")
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		io.WriteString(w, "#EXTM3U\n#EXTINF:0.5,\nsegment.ts?id=X&n=1\n")
+	}))
+	defer upstream.Close()
+
+	p := New("secret", time.Hour, "")
+	p.SetKeepaliveMax(80 * time.Millisecond)
+	variant := upstream.URL + "/hls/playlist.m3u8?id=X"
+	p.touchSession(variant, variant) // register (variant URL carries ?id=X)
+
+	time.Sleep(70 * time.Millisecond) // ~4 ping cycles while "active"
+	if n := atomic.LoadInt32(&segFetches); n < 2 {
+		t.Fatalf("keepalive did not ping segments: got %d", n)
+	}
+
+	time.Sleep(160 * time.Millisecond) // no touch -> idle past keepaliveMax
+	p.mu.Lock()
+	_, alive := p.sessions["X"]
+	p.mu.Unlock()
+	if alive {
+		t.Fatal("session not cleaned up after keepaliveMax idle")
+	}
+}
+
+// A zero keepaliveMax disables the feature: no session is registered.
+func TestKeepAliveDisabled(t *testing.T) {
+	p := New("secret", time.Hour, "")
+	p.SetKeepaliveMax(0)
+	p.touchSession("http://x/hls/playlist.m3u8?id=Z", "http://x/hls/playlist.m3u8?id=Z")
+	p.mu.Lock()
+	n := len(p.sessions)
+	p.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("keepalive disabled but %d sessions registered", n)
 	}
 }
 

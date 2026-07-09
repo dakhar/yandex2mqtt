@@ -71,6 +71,7 @@ func (h *Handlers) Settings(w http.ResponseWriter, r *http.Request) {
 		data["OHURL"] = o.URL
 		data["OHHasToken"] = o.Token != ""
 		data["Go2RTCURL"] = g.URL
+		data["Go2RTCKeepalive"] = g.KeepaliveSec
 	}
 	h.render(w, "settings.html", data)
 }
@@ -92,6 +93,7 @@ func (h *Handlers) ServerConfig(w http.ResponseWriter, r *http.Request) {
 	set(store.CfgMQTTUser, strings.TrimSpace(r.PostFormValue("mqtt_user")))
 	set(store.CfgOpenHABURL, strings.TrimSpace(r.PostFormValue("openhab_url")))
 	set(store.CfgGo2RTCURL, strings.TrimSpace(r.PostFormValue("go2rtc_url")))
+	set(store.CfgGo2RTCKeep, strings.TrimSpace(r.PostFormValue("go2rtc_keepalive")))
 	// Secrets: only overwrite when a new value is supplied (blank = keep current).
 	if v := r.PostFormValue("mqtt_password"); v != "" {
 		set(store.CfgMQTTPassword, v)
