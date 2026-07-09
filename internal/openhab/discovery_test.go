@@ -87,6 +87,25 @@ func TestCameraHLSInference(t *testing.T) {
 	}
 }
 
+// A Cam*MjpegUrl item becomes an MJPEG video_stream camera (protocols=[mjpeg]).
+func TestCameraMJPEGInference(t *testing.T) {
+	d, ok := draftForItem(ohItem{Name: "CamDoorMjpegUrl", Type: "String", Label: "Камера у двери"})
+	if !ok {
+		t.Fatal("Cam*MjpegUrl String must be inferred as a camera")
+	}
+	if d.Type != "devices.types.camera" || len(d.Capabilities) != 1 ||
+		d.Capabilities[0].Type != "devices.capabilities.video_stream" {
+		t.Fatalf("camera caps: type=%q %+v", d.Type, d.Capabilities)
+	}
+	ps, _ := d.Capabilities[0].Parameters["protocols"].([]any)
+	if len(ps) != 1 || ps[0] != "mjpeg" {
+		t.Fatalf("expected protocols=[mjpeg], got %+v", d.Capabilities[0].Parameters)
+	}
+	if errs, _ := device.ValidateCatalog([]config.Device{d}); len(errs) > 0 {
+		t.Fatalf("mjpeg camera draft invalid: %v", errs)
+	}
+}
+
 // yahome=cleanup_mode marks a vacuum's cleaning-type selector as a mode/cleanup_mode
 // capability; a modes="yandex=device,..." config also yields the value mapping.
 func TestCleanupModeYahome(t *testing.T) {

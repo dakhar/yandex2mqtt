@@ -284,7 +284,12 @@ function renderParams(rowId, data) {
     html += `<label class="hint"><input type="checkbox" class="f-invert"${d.invert ? ' checked' : ''}> Инвертировать проценты <span class="hint">(0% у устройства = 100% у Яндекса — для штор/Rollershutter)</span></label>`;
   }
   if (actType === 'video_stream') {
-    html += `<div class="hint">В поле ниже впиши <b>HLS-URL</b> напрямую (<code>https://…/playlist.m3u8</code>, отдающий <code>application/vnd.apple.mpegurl</code>) — или item/топик, где этот URL хранится (для камер с меняющимся токеном). Для openHAB item может отдавать и относительный путь (<code>/ipcamera/…/ipcamera.m3u8</code>) — он резолвится к адресу сервера openHAB. Протокол: hls; умение не запрашивается и не репортится.</div>`;
+    const proto = (dParams.protocols && dParams.protocols[0]) || 'hls';
+    html += `<div><label>Протокол</label><select class="f-proto">
+      <option value="hls"${proto === 'hls' ? ' selected' : ''}>HLS (.m3u8, со звуком)</option>
+      <option value="mjpeg"${proto === 'mjpeg' ? ' selected' : ''}>MJPEG (ниже задержка, без звука)</option>
+    </select></div>`;
+    html += `<div class="hint">Впиши <b>URL потока</b> напрямую или item/топик, где он хранится (для камер с меняющимся токеном). <b>HLS</b>: <code>https://…/playlist.m3u8</code> (<code>application/vnd.apple.mpegurl</code>). <b>MJPEG</b>: <code>multipart/x-mixed-replace</code> — задержка ниже, но без звука. openHAB item может отдавать относительный путь (<code>/ipcamera/…</code>) — он резолвится к адресу сервера openHAB. Умение не запрашивается и не репортится.</div>`;
   }
   // Robot vacuum on_off is special: the command is routed to the aggregator
   // (START/home or segment cleaning), so the table below is state-only —
@@ -390,7 +395,7 @@ function collect(kind) {
       if (inst === 'temperature_k') params.temperature_k = { min: num(row, '.f-min'), max: num(row, '.f-max') };
       else if (inst === 'hsv' || inst === 'rgb') params.color_model = inst;
     }
-    if (actType === 'video_stream') params.protocols = ['hls'];
+    if (actType === 'video_stream') { const pe = row.querySelector('.f-proto'); params.protocols = [pe ? pe.value : 'hls']; }
     const setEl = row.querySelector('.f-set');
     const itemEl = row.querySelector('.f-item');
     const pathEl = row.querySelector('.f-path');

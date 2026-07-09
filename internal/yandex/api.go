@@ -25,9 +25,9 @@ type API struct {
 	log      *slog.Logger
 	auth     func(http.Handler) http.Handler
 	onUnlink func(userID string) // optional token revocation hook (step 5)
-	// streamURL rewrites a raw HLS URL into a public proxied one for a given
-	// request; nil leaves get_stream results untouched.
-	streamURL func(r *http.Request, raw string) string
+	// streamURL rewrites a raw stream URL into a public proxied one for a given
+	// request and protocol ("hls"/"mjpeg"); nil leaves get_stream results untouched.
+	streamURL func(r *http.Request, raw, protocol string) string
 }
 
 // New builds the API. auth is the authentication middleware (StubAuth in step 4,
@@ -42,9 +42,10 @@ func New(store Store, auth func(http.Handler) http.Handler, log *slog.Logger) *A
 // SetUnlinkHook registers a callback invoked on account unlink.
 func (a *API) SetUnlinkHook(f func(userID string)) { a.onUnlink = f }
 
-// SetStreamRewriter registers the function that turns a raw HLS URL into a public
-// proxied one (see internal/stream). Without it, get_stream returns the raw URL.
-func (a *API) SetStreamRewriter(f func(r *http.Request, raw string) string) { a.streamURL = f }
+// SetStreamRewriter registers the function that turns a raw stream URL into a
+// public proxied one for its protocol (see internal/stream). Without it,
+// get_stream returns the raw URL.
+func (a *API) SetStreamRewriter(f func(r *http.Request, raw, protocol string) string) { a.streamURL = f }
 
 // Routes returns the provider router. Mount it at the endpoint base path
 // (the legacy service used "/provider", which Yandex has registered).
@@ -144,7 +145,8 @@ func (a *API) rewriteStream(r *http.Request, res *device.ActionCapResult) {
 		return
 	}
 	if raw, _ := m["stream_url"].(string); raw != "" {
-		m["stream_url"] = a.streamURL(r, raw)
+		protocol, _ := m["protocol"].(string)
+		m["stream_url"] = a.streamURL(r, raw, protocol)
 	}
 }
 

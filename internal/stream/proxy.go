@@ -38,7 +38,10 @@ type Proxy struct {
 	ttl    time.Duration
 	base   string // configured public base (no trailing slash); "" = derive from request
 	client *http.Client
-	log    *slog.Logger
+	// streamClient fetches long-lived streams (MJPEG multipart) that never end,
+	// so it has no total timeout — the inbound request's context bounds its life.
+	streamClient *http.Client
+	log          *slog.Logger
 }
 
 // New builds a Proxy. secret keys the HMAC that authenticates tokens (reuse the
@@ -48,11 +51,12 @@ type Proxy struct {
 func New(secret string, ttl time.Duration, base string) *Proxy {
 	sum := sha256.Sum256([]byte(secret))
 	return &Proxy{
-		key:    sum[:],
-		ttl:    ttl,
-		base:   strings.TrimRight(base, "/"),
-		client: &http.Client{Timeout: fetchTimeout},
-		log:    slog.Default(),
+		key:          sum[:],
+		ttl:          ttl,
+		base:         strings.TrimRight(base, "/"),
+		client:       &http.Client{Timeout: fetchTimeout},
+		streamClient: &http.Client{}, // no total timeout: MJPEG streams forever
+		log:          slog.Default(),
 	}
 }
 
@@ -64,10 +68,16 @@ func (p *Proxy) SetLogger(l *slog.Logger) {
 	}
 }
 
-// PublicURL turns a raw (locally reachable) HLS URL into an absolute, public
+// mjpegSuffix marks a proxied MJPEG stream in the URL path; the handler keys off
+// it to use the long-lived (no-timeout, flushing) streaming path.
+const mjpegSuffix = ".mjpeg"
+
+// PublicURL turns a raw (locally reachable) stream URL into an absolute, public
 // proxied URL. It uses the configured base if set, else derives scheme/host from
 // the inbound request's forwarded headers. This is what get_stream returns.
-func (p *Proxy) PublicURL(r *http.Request, rawURL string) string {
+// protocol is the video_stream protocol ("hls" or "mjpeg"); it only selects the
+// cosmetic path extension so the URL looks like the right kind of resource.
+func (p *Proxy) PublicURL(r *http.Request, rawURL, protocol string) string {
 	base := p.base
 	if base == "" {
 		scheme := "https"
@@ -82,13 +92,18 @@ func (p *Proxy) PublicURL(r *http.Request, rawURL string) string {
 		}
 		base = scheme + "://" + host
 	}
-	// The URL must look like an HLS playlist (end in .m3u8) — Yandex's player
-	// keys off the extension and won't fetch an extension-less URL. The signed
-	// token rides in the query string as "token", mirroring Yandex's own example
-	// (…/playlist.m3u8?token=…). It must NOT be named "t": the in-app player
-	// reserves "t" for its own timestamp/cache-bust value and overwrites it
-	// (observed: it replaced our token with t=<unix_ms>, producing a 403).
-	return base + "/stream/index.m3u8?token=" + p.sign(rawURL)
+	// The path name carries an extension matching the stream kind: HLS must end in
+	// .m3u8 (Yandex's player keys off it and won't fetch an extension-less URL),
+	// MJPEG in .mjpeg. The signed token rides in the query string as "token",
+	// mirroring Yandex's own example (…/playlist.m3u8?token=…). It must NOT be
+	// named "t": the in-app player reserves "t" for its own timestamp/cache-bust
+	// value and overwrites it (observed: it replaced our token with t=<unix_ms>,
+	// producing a 403).
+	name := "index.m3u8"
+	if protocol == "mjpeg" {
+		name = "index" + mjpegSuffix
+	}
+	return base + "/stream/" + name + "?token=" + p.sign(rawURL)
 }
 
 // Handler serves GET/OPTIONS /stream/{name}?token=<token>: it verifies the token,
@@ -128,6 +143,11 @@ func (p *Proxy) Handler() http.HandlerFunc {
 			"vpuid", q.Get("vpuid"),
 		)
 
+		// A long-lived MJPEG stream (marked by the .mjpeg path) is fetched with the
+		// no-timeout client and streamed straight through with per-write flushing;
+		// it is never a playlist, so skip that path entirely.
+		streaming := strings.HasSuffix(r.URL.Path, mjpegSuffix)
+
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, raw, nil)
 		if err != nil {
 			http.Error(w, "bad gateway", http.StatusBadGateway)
@@ -136,12 +156,28 @@ func (p *Proxy) Handler() http.HandlerFunc {
 		if rng := r.Header.Get("Range"); rng != "" {
 			req.Header.Set("Range", rng)
 		}
-		resp, err := p.client.Do(req)
+		client := p.client
+		if streaming {
+			client = p.streamClient
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			http.Error(w, "bad gateway", http.StatusBadGateway)
 			return
 		}
 		defer resp.Body.Close()
+
+		if streaming {
+			ct := resp.Header.Get("Content-Type")
+			if ct == "" {
+				ct = "multipart/x-mixed-replace"
+			}
+			w.Header().Set("Content-Type", ct)
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(resp.StatusCode)
+			flushCopy(w, resp.Body)
+			return
+		}
 
 		if isPlaylist(raw, resp.Header.Get("Content-Type")) {
 			body, err := io.ReadAll(io.LimitReader(resp.Body, maxPlaylist))
@@ -320,6 +356,28 @@ func contentTypeFor(rawURL string) string {
 		return "audio/aac"
 	default:
 		return "application/octet-stream"
+	}
+}
+
+// flushCopy streams src to w, flushing after every chunk so a live MJPEG feed
+// reaches the client frame-by-frame instead of being buffered. It returns when
+// src ends or the client disconnects (the request context cancels the read).
+func flushCopy(w http.ResponseWriter, src io.Reader) {
+	fl, _ := w.(http.Flusher)
+	buf := make([]byte, 32*1024)
+	for {
+		n, rerr := src.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return
+			}
+			if fl != nil {
+				fl.Flush()
+			}
+		}
+		if rerr != nil {
+			return
+		}
 	}
 }
 

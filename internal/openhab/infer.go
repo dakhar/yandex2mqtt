@@ -127,6 +127,12 @@ func featuresForItem(it ohItem, ctxType string) ([]feature, string) {
 		if isCameraHLSItem(it) {
 			return []feature{capFeat("get_stream", capVideoStream(), it.Name)}, "devices.types.camera"
 		}
+		// The IpCamera binding's sibling Cam<Name>MjpegUrl -> an MJPEG video_stream
+		// (lower latency than HLS, no audio); the connector resolves the relative
+		// path the same way.
+		if isCameraMJPEGItem(it) {
+			return []feature{capFeat("get_stream", capVideoStream("mjpeg"), it.Name)}, "devices.types.camera"
+		}
 		// A String speed setpoint (options like off/low/medium/high) -> fan_speed.
 		if hasTag(it.Tags, "Speed") {
 			return []feature{stringSpeed(it)}, "devices.types.ventilation.fan"
@@ -312,6 +318,12 @@ func numberFeature(it ohItem, role, prop, ctxType string) ([]feature, string) {
 // video_stream needs the .m3u8 playlist, not a still.
 func isCameraHLSItem(it ohItem) bool {
 	return it.Type == "String" && strings.HasSuffix(strings.ToLower(it.Name), "hlsurl")
+}
+
+// isCameraMJPEGItem reports whether a String item is a camera's MJPEG-stream URL,
+// by the IpCamera binding's canonical Cam<Name>MjpegUrl naming (case-insensitive).
+func isCameraMJPEGItem(it ohItem) bool {
+	return it.Type == "String" && strings.HasSuffix(strings.ToLower(it.Name), "mjpegurl")
 }
 
 // deviceTypeFor picks a device type from an item's own semantic tags.
@@ -596,10 +608,20 @@ func capMode(instance string, modes []string) config.Capability {
 	}
 }
 
-func capVideoStream() config.Capability {
+// capVideoStream builds a video_stream capability declaring the given protocols
+// (defaulting to "hls"). Yandex's player negotiates the returned stream against
+// these; a camera typically declares the single protocol its URL serves.
+func capVideoStream(protocols ...string) config.Capability {
+	ps := make([]any, 0, len(protocols))
+	for _, p := range protocols {
+		ps = append(ps, p)
+	}
+	if len(ps) == 0 {
+		ps = []any{"hls"}
+	}
 	return config.Capability{
 		Type: "devices.capabilities.video_stream", Retrievable: false, Reportable: false,
-		Parameters: map[string]any{"protocols": []any{"hls"}},
+		Parameters: map[string]any{"protocols": ps},
 	}
 }
 

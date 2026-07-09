@@ -51,12 +51,16 @@ func TestPublicURLBase(t *testing.T) {
 	req.Host = "10.0.0.5:8080" // proxy forwarded an internal Host
 
 	withBase := New("secret", time.Hour, "https://yahome.bels.pw/")
-	if got := withBase.PublicURL(req, "http://cam/x.m3u8"); !strings.HasPrefix(got, "https://yahome.bels.pw/stream/") {
+	if got := withBase.PublicURL(req, "http://cam/x.m3u8", "hls"); !strings.HasPrefix(got, "https://yahome.bels.pw/stream/index.m3u8?token=") {
 		t.Fatalf("configured base ignored: %q", got)
 	}
 	noBase := New("secret", time.Hour, "")
-	if got := noBase.PublicURL(req, "http://cam/x.m3u8"); !strings.HasPrefix(got, "https://10.0.0.5:8080/stream/") {
+	if got := noBase.PublicURL(req, "http://cam/x.m3u8", "hls"); !strings.HasPrefix(got, "https://10.0.0.5:8080/stream/index.m3u8?token=") {
 		t.Fatalf("fallback host wrong: %q", got)
+	}
+	// MJPEG gets an .mjpeg path so the handler picks the streaming path.
+	if got := withBase.PublicURL(req, "http://cam/live", "mjpeg"); !strings.HasPrefix(got, "https://yahome.bels.pw/stream/index.mjpeg?token=") {
+		t.Fatalf("mjpeg url wrong: %q", got)
 	}
 }
 
@@ -202,5 +206,41 @@ func TestHandlerProxiesPlaylistAndSegment(t *testing.T) {
 	}
 	if got := segResp.Header.Get("Access-Control-Allow-Origin"); got != corsOrigin {
 		t.Fatalf("segment CORS=%q", got)
+	}
+}
+
+// TestHandlerStreamsMJPEG checks that an MJPEG feed proxied via /stream/*.mjpeg is
+// streamed through verbatim with CORS and its multipart content type — not run
+// through the HLS-playlist path.
+func TestHandlerStreamsMJPEG(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+		io.WriteString(w, "--frame\r\nContent-Type: image/jpeg\r\n\r\nJPEGDATA\r\n")
+	}))
+	defer upstream.Close()
+
+	p := New("secret", time.Hour, "")
+	r := chi.NewRouter()
+	r.HandleFunc("/stream/{name}", p.Handler())
+	front := httptest.NewServer(r)
+	defer front.Close()
+
+	resp, err := http.Get(front.URL + "/stream/index.mjpeg?token=" + p.sign(upstream.URL+"/live"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "multipart/x-mixed-replace") {
+		t.Fatalf("mjpeg content-type = %q", ct)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != corsOrigin {
+		t.Fatalf("mjpeg CORS = %q", got)
+	}
+	if !strings.Contains(string(body), "JPEGDATA") {
+		t.Fatalf("mjpeg body not streamed through: %q", body)
 	}
 }

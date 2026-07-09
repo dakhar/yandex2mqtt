@@ -229,7 +229,7 @@ func (d *Device) SetCapabilityState(val any, capType, instance string, relative 
 			Type: capType,
 			State: ActionState{
 				Instance:     instance,
-				Value:        map[string]any{"stream_url": d.streamURL, "protocol": "hls"},
+				Value:        map[string]any{"stream_url": d.streamURL, "protocol": d.videoProtocol(val)},
 				ActionResult: ActionResult{Status: "DONE"},
 			},
 		}
@@ -358,6 +358,39 @@ func (d *Device) UpdateFromMQTT(val string, instance string, isProp bool) {
 		yv = invertRange(yv, params)
 	}
 	set(&State{Instance: instance, Value: yv})
+}
+
+// videoProtocol picks the protocol a get_stream response advertises: the
+// device's declared video_stream protocol, preferring one the app requested (req
+// is the action value, carrying "protocols"). Defaults to "hls".
+func (d *Device) videoProtocol(req any) string {
+	dev := []string{"hls"}
+	if c := d.findCapByType("devices.capabilities.video_stream"); c != nil {
+		if ps, ok := c.Parameters["protocols"].([]any); ok && len(ps) > 0 {
+			dev = dev[:0]
+			for _, p := range ps {
+				if s, ok := p.(string); ok && s != "" {
+					dev = append(dev, s)
+				}
+			}
+			if len(dev) == 0 {
+				dev = append(dev, "hls")
+			}
+		}
+	}
+	// Prefer a declared protocol the app asked for; otherwise the first declared.
+	if m, ok := req.(map[string]any); ok {
+		if reqProtos, ok := m["protocols"].([]any); ok {
+			for _, dp := range dev {
+				for _, rp := range reqProtos {
+					if s, _ := rp.(string); s == dp {
+						return dp
+					}
+				}
+			}
+		}
+	}
+	return dev[0]
 }
 
 // --- lookups ---

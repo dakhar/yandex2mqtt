@@ -208,6 +208,26 @@ func TestVideoStreamGetStream(t *testing.T) {
 	}
 }
 
+// A camera declaring mjpeg returns protocol="mjpeg" on get_stream, so the proxy
+// and the app pick the MJPEG path.
+func TestVideoStreamMJPEGProtocol(t *testing.T) {
+	d := New(config.Device{
+		ID: "Cam", Type: "devices.types.camera",
+		MQTT: config.MQTTMapping{Capabilities: []config.MQTTTopic{{Instance: "get_stream", State: "cam/url"}}},
+		Capabilities: []config.Capability{{
+			Type: "devices.capabilities.video_stream", Retrievable: false, Reportable: false,
+			Parameters: map[string]any{"protocols": []any{"mjpeg"}},
+		}},
+	}, nil, nil)
+
+	d.UpdateFromMQTT("https://host/live", StreamInstance, false)
+	r := d.SetCapabilityState(map[string]any{"protocols": []any{"mjpeg"}}, "devices.capabilities.video_stream", "get_stream", false)
+	v, _ := r.State.Value.(map[string]any)
+	if v["protocol"] != "mjpeg" || v["stream_url"] != "https://host/live" {
+		t.Fatalf("mjpeg stream value = %+v", r.State.Value)
+	}
+}
+
 func TestErrorCodeFromRules(t *testing.T) {
 	d := New(config.Device{
 		ID: "V", Type: "devices.types.vacuum_cleaner",
