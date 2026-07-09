@@ -44,9 +44,9 @@ type Handlers struct {
 	go2rtc      go2rtcLister // nil when go2rtc isn't configured
 	onDiscovery func(userID string) // notify Yandex the device list changed (nil = off)
 
-	// Admin-editable server (MQTT/openHAB) connection config.
+	// Admin-editable server (MQTT/openHAB/go2rtc) connection config.
 	configRepo   *store.ConfigRepo
-	effectiveCfg func() (config.MQTT, config.OpenHAB)
+	effectiveCfg func() (config.MQTT, config.OpenHAB, config.Go2RTC)
 	applyServer  func() error
 
 	log *slog.Logger
@@ -69,7 +69,7 @@ func (h *Handlers) SetGo2RTC(g go2rtcLister) { h.go2rtc = g }
 // SetServerConfig wires the admin server-config editor: the repo to persist to,
 // an accessor for the effective (env+DB) config, and an apply hook that
 // reconnects MQTT/openHAB.
-func (h *Handlers) SetServerConfig(cr *store.ConfigRepo, effective func() (config.MQTT, config.OpenHAB), apply func() error) {
+func (h *Handlers) SetServerConfig(cr *store.ConfigRepo, effective func() (config.MQTT, config.OpenHAB, config.Go2RTC), apply func() error) {
 	h.configRepo = cr
 	h.effectiveCfg = effective
 	h.applyServer = apply

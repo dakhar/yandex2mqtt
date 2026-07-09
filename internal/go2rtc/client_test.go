@@ -31,6 +31,23 @@ func TestStreamsSortedAndURL(t *testing.T) {
 	}
 }
 
+func TestSetBaseRuntime(t *testing.T) {
+	c := New("")
+	if c.Base() != "" {
+		t.Fatalf("initial base = %q", c.Base())
+	}
+	if names, _ := c.Streams(context.Background()); names != nil {
+		t.Fatalf("empty base should list nothing, got %v", names)
+	}
+	c.SetBase("http://127.0.0.1:1984/") // admin sets it at runtime
+	if c.Base() != "http://127.0.0.1:1984" {
+		t.Fatalf("base after SetBase = %q", c.Base())
+	}
+	if got := c.StreamURL("door"); got != "http://127.0.0.1:1984/api/stream.m3u8?src=door" {
+		t.Fatalf("StreamURL after SetBase = %q", got)
+	}
+}
+
 func TestStreamsDisabled(t *testing.T) {
 	// A nil client and an empty base both mean "feature off": no error, no names.
 	var nilC *Client

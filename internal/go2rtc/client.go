@@ -13,11 +13,15 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
-// Client talks to a go2rtc HTTP API base (e.g. http://127.0.0.1:1984).
+// Client talks to a go2rtc HTTP API base (e.g. http://127.0.0.1:1984). The base
+// is guarded by a mutex so an admin can change it at runtime (settings page)
+// without racing concurrent readers — the same *Client instance is reused.
 type Client struct {
+	mu     sync.RWMutex
 	base   string
 	client *http.Client
 }
@@ -31,15 +35,30 @@ func New(base string) *Client {
 }
 
 // Base returns the configured base URL.
-func (c *Client) Base() string { return c.base }
+func (c *Client) Base() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.base
+}
+
+// SetBase updates the go2rtc base URL at runtime (empty disables the feature).
+func (c *Client) SetBase(base string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.base = strings.TrimRight(base, "/")
+}
 
 // Streams returns the configured stream names, sorted. A nil client or empty
 // base yields an empty list (feature disabled), not an error.
 func (c *Client) Streams(ctx context.Context) ([]string, error) {
-	if c == nil || c.base == "" {
+	if c == nil {
 		return nil, nil
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/api/streams", nil)
+	base := c.Base()
+	if base == "" {
+		return nil, nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/streams", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -67,5 +86,5 @@ func (c *Client) Streams(ctx context.Context) ([]string, error) {
 // StreamURL is the HLS URL the video_stream proxy should fetch for a stream. It
 // points at go2rtc's internal base, so it must be reachable from this process.
 func (c *Client) StreamURL(name string) string {
-	return c.base + "/api/stream.m3u8?src=" + url.QueryEscape(name)
+	return c.Base() + "/api/stream.m3u8?src=" + url.QueryEscape(name)
 }

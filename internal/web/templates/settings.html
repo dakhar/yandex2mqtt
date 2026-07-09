@@ -30,6 +30,11 @@
         <div><label class="fl">URL</label><input type="text" name="openhab_url" value="{{.OHURL}}" placeholder="http://10.12.1.103:8080"></div>
         <div><label class="fl">API-токен</label><input type="password" name="openhab_token" placeholder="{{if .OHHasToken}}•••••• (задан){{else}}(не задан){{end}}" autocomplete="new-password"></div>
       </div>
+      <h3>go2rtc</h3>
+      <div class="grid2">
+        <div><label class="fl">URL</label><input type="text" name="go2rtc_url" value="{{.Go2RTCURL}}" placeholder="http://127.0.0.1:1984"></div>
+      </div>
+      <div class="hint">Релей камер go2rtc: включает выбор потока в конструкторе устройств (карточка «видеопоток»). Пусто = выключено.</div>
       <div class="hint">Пароль/токен оставь пустыми, чтобы не менять. Секреты хранятся в БД.</div>
       <button type="submit" class="btn btn-imp" style="margin-top:10px"
               onsubmit="return true">Сохранить и переподключить</button>

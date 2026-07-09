@@ -133,7 +133,7 @@ func run() error {
 	configRepo := store.NewConfigRepo(db)
 	envMQTT, envOpenHAB := cfg.MQTT, cfg.OpenHAB
 	if all, err := configRepo.All(ctx0); err == nil {
-		overlayServerCfg(&cfg.MQTT, &cfg.OpenHAB, all)
+		overlayServerCfg(&cfg.MQTT, &cfg.OpenHAB, &cfg.Go2RTC, all)
 	}
 
 	// Yandex state-change notifier (nil when not configured).
@@ -182,10 +182,11 @@ func run() error {
 
 	board := web.New(store.NewRoomRepo(db), catalog, manager, logger)
 	board.SetDiscovery(ohConn, store.NewSettingsRepo(db), store.NewIgnoreRepo(db))
-	if cfg.Go2RTC.URL != "" {
-		board.SetGo2RTC(go2rtc.New(cfg.Go2RTC.URL))
-		logger.Info("go2rtc stream picker enabled", "url", cfg.Go2RTC.URL)
-	}
+	// go2rtc camera relay for the builder's stream picker. The same client is
+	// reused for the app's lifetime; its base can be overridden from the DB and
+	// changed at runtime via the settings page (see the apply hook below).
+	go2rtcClient := go2rtc.New(cfg.Go2RTC.URL)
+	board.SetGo2RTC(go2rtcClient)
 	if notifier != nil {
 		// After a catalog change, ask Yandex to re-discover the user's devices.
 		board.SetDiscoveryNotifier(notifier.NotifyDiscovery)
@@ -193,19 +194,20 @@ func run() error {
 
 	// Admin-editable server config: effective values (env overlaid with DB) for
 	// display, and an apply hook that reconnects MQTT/openHAB at runtime.
-	effective := func() (config.MQTT, config.OpenHAB) {
-		m, o := envMQTT, envOpenHAB
+	effective := func() (config.MQTT, config.OpenHAB, config.Go2RTC) {
+		m, o, g := envMQTT, envOpenHAB, cfg.Go2RTC
 		if all, err := configRepo.All(ctx0); err == nil {
-			overlayServerCfg(&m, &o, all)
+			overlayServerCfg(&m, &o, &g, all)
 		}
-		return m, o
+		return m, o, g
 	}
 	board.SetServerConfig(configRepo, effective, func() error {
-		m, o := effective()
+		m, o, g := effective()
 		if err := bridge.Reconfigure(m); err != nil {
 			return err
 		}
 		ohConn.Reconfigure(o)
+		go2rtcClient.SetBase(g.URL)
 		return nil
 	})
 
@@ -295,7 +297,7 @@ func run() error {
 
 // overlayServerCfg applies non-empty app_config values over the env-derived MQTT
 // and openHAB config. Empty/absent keys keep the env value.
-func overlayServerCfg(m *config.MQTT, o *config.OpenHAB, all map[string]string) {
+func overlayServerCfg(m *config.MQTT, o *config.OpenHAB, g *config.Go2RTC, all map[string]string) {
 	if v := all[store.CfgMQTTHost]; v != "" {
 		m.Host = v
 	}
@@ -315,6 +317,9 @@ func overlayServerCfg(m *config.MQTT, o *config.OpenHAB, all map[string]string) 
 	}
 	if v := all[store.CfgOpenHABToken]; v != "" {
 		o.Token = v
+	}
+	if v := all[store.CfgGo2RTCURL]; v != "" {
+		g.URL = v
 	}
 }
 

@@ -14,6 +14,7 @@ const (
 	CfgMQTTPassword = "mqtt_password"
 	CfgOpenHABURL   = "openhab_url"
 	CfgOpenHABToken = "openhab_token"
+	CfgGo2RTCURL    = "go2rtc_url"
 )
 
 // ConfigRepo stores instance-wide server settings (MQTT/openHAB connection).
