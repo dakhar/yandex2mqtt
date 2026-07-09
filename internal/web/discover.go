@@ -36,6 +36,27 @@ func (h *Handlers) OpenHABItems(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(items)
 }
 
+// Go2RTCStreams returns the go2rtc streams as [{name,url}] for the builder's
+// video_stream picker (GET /app/go2rtc/streams); url is the HLS URL to store in
+// the capability. Empty list when go2rtc is absent or unreachable — the builder
+// just hides the picker and the user types a URL as before.
+func (h *Handlers) Go2RTCStreams(w http.ResponseWriter, r *http.Request) {
+	type stream struct {
+		Name string `json:"name"`
+		URL  string `json:"url"`
+	}
+	out := []stream{}
+	if h.go2rtc != nil {
+		if names, err := h.go2rtc.Streams(r.Context()); err == nil {
+			for _, n := range names {
+				out = append(out, stream{Name: n, URL: h.go2rtc.StreamURL(n)})
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
 // defaultDiscoveryTag is the initial per-user openHAB discovery filter. Users
 // can change it (or clear it, meaning "all items") in the discovery settings.
 const defaultDiscoveryTag = "ya2mqtt"

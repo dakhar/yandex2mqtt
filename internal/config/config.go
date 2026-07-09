@@ -24,6 +24,7 @@ type Config struct {
 	OAuth   OAuthClient
 	Yandex  Yandex
 	OpenHAB OpenHAB
+	Go2RTC  Go2RTC
 
 	DBPath      string `env:"DB_PATH" envDefault:"./data/yandex2mqtt.db"`
 	DevicesFile string `env:"DEVICES_FILE" envDefault:"./data/devices.yaml"`
@@ -54,6 +55,14 @@ type Web struct {
 	// instead of the request's Host header — robust to reverse proxies that don't
 	// preserve Host.
 	PublicURL string `env:"PUBLIC_URL"`
+}
+
+// Go2RTC points at a go2rtc instance (github.com/AlexxIT/go2rtc) used as the
+// camera relay: it pulls RTSP/ONVIF and serves stable low-latency HLS that the
+// video_stream proxy fetches. URL is the internal base (e.g. http://127.0.0.1:1984)
+// reachable from this process; empty disables the builder's go2rtc stream picker.
+type Go2RTC struct {
+	URL string `env:"GO2RTC_URL"`
 }
 
 // Session holds the cookie session secret (replaces the hardcoded value).

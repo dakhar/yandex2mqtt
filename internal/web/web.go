@@ -41,6 +41,7 @@ type Handlers struct {
 	discoverer  Discoverer // nil when openHAB isn't configured
 	settings    *store.SettingsRepo
 	ignore      *store.IgnoreRepo
+	go2rtc      go2rtcLister // nil when go2rtc isn't configured
 	onDiscovery func(userID string) // notify Yandex the device list changed (nil = off)
 
 	// Admin-editable server (MQTT/openHAB) connection config.
@@ -54,6 +55,16 @@ type Handlers struct {
 // SetDiscoveryNotifier registers a hook fired after a user's catalog changes, so
 // Yandex re-syncs the device list (Notification API /callback/discovery).
 func (h *Handlers) SetDiscoveryNotifier(f func(userID string)) { h.onDiscovery = f }
+
+// go2rtcLister lists a go2rtc instance's streams and builds their HLS URL (see
+// internal/go2rtc). Satisfied by *go2rtc.Client.
+type go2rtcLister interface {
+	Streams(ctx context.Context) ([]string, error)
+	StreamURL(name string) string
+}
+
+// SetGo2RTC wires the go2rtc stream lister for the builder's camera picker.
+func (h *Handlers) SetGo2RTC(g go2rtcLister) { h.go2rtc = g }
 
 // SetServerConfig wires the admin server-config editor: the repo to persist to,
 // an accessor for the effective (env+DB) config, and an apply hook that

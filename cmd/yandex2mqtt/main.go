@@ -23,6 +23,7 @@ import (
 
 	"github.com/dakhar/yandex2mqtt/internal/config"
 	"github.com/dakhar/yandex2mqtt/internal/device"
+	"github.com/dakhar/yandex2mqtt/internal/go2rtc"
 	"github.com/dakhar/yandex2mqtt/internal/httplog"
 	"github.com/dakhar/yandex2mqtt/internal/mqtt"
 	"github.com/dakhar/yandex2mqtt/internal/openhab"
@@ -181,6 +182,10 @@ func run() error {
 
 	board := web.New(store.NewRoomRepo(db), catalog, manager, logger)
 	board.SetDiscovery(ohConn, store.NewSettingsRepo(db), store.NewIgnoreRepo(db))
+	if cfg.Go2RTC.URL != "" {
+		board.SetGo2RTC(go2rtc.New(cfg.Go2RTC.URL))
+		logger.Info("go2rtc stream picker enabled", "url", cfg.Go2RTC.URL)
+	}
 	if notifier != nil {
 		// After a catalog change, ask Yandex to re-discover the user's devices.
 		board.SetDiscoveryNotifier(notifier.NotifyDiscovery)
@@ -237,6 +242,7 @@ func run() error {
 	root.With(sessions.RequireLogin).Post("/app/settings/reset", board.ResetConfig)
 	root.With(sessions.RequireLogin).Post("/app/settings/servers", board.ServerConfig)
 	root.With(sessions.RequireLogin).Get("/app/openhab/items", board.OpenHABItems)
+	root.With(sessions.RequireLogin).Get("/app/go2rtc/streams", board.Go2RTCStreams)
 	root.With(sessions.RequireLogin).Get("/app/discover/vacuum", board.VacuumSetupPage)
 	root.With(sessions.RequireLogin).Post("/app/discover/vacuum", board.CreateVacuum)
 	root.With(sessions.RequireLogin).Get("/app/discover", board.Discover)
