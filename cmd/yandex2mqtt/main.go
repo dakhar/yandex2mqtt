@@ -176,6 +176,7 @@ func run() error {
 	// so Alice's player reaches a camera's local HLS (CORS + reachability) with
 	// no transcoding on our side.
 	streamProxy := stream.New(cfg.Session.Secret, time.Hour, cfg.Web.PublicURL)
+	streamProxy.SetLogger(logger)
 	api.SetStreamRewriter(streamProxy.PublicURL)
 
 	board := web.New(store.NewRoomRepo(db), catalog, manager, logger)

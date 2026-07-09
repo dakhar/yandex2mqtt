@@ -13,11 +13,14 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dakhar/yandex2mqtt/internal/httplog"
 )
 
 // corsOrigin is the origin Alice's HLS player runs on; it must be allowed or the
@@ -35,6 +38,7 @@ type Proxy struct {
 	ttl    time.Duration
 	base   string // configured public base (no trailing slash); "" = derive from request
 	client *http.Client
+	log    *slog.Logger
 }
 
 // New builds a Proxy. secret keys the HMAC that authenticates tokens (reuse the
@@ -48,6 +52,15 @@ func New(secret string, ttl time.Duration, base string) *Proxy {
 		ttl:    ttl,
 		base:   strings.TrimRight(base, "/"),
 		client: &http.Client{Timeout: fetchTimeout},
+		log:    slog.Default(),
+	}
+}
+
+// SetLogger routes the proxy's diagnostic logs to the app logger. A nil logger
+// is ignored (the default remains slog.Default()).
+func (p *Proxy) SetLogger(l *slog.Logger) {
+	if l != nil {
+		p.log = l
 	}
 }
 
@@ -71,12 +84,14 @@ func (p *Proxy) PublicURL(r *http.Request, rawURL string) string {
 	}
 	// The URL must look like an HLS playlist (end in .m3u8) — Yandex's player
 	// keys off the extension and won't fetch an extension-less URL. The signed
-	// token rides in the query string, mirroring Yandex's own example
-	// (…/playlist.m3u8?token=…).
-	return base + "/stream/index.m3u8?t=" + p.sign(rawURL)
+	// token rides in the query string as "token", mirroring Yandex's own example
+	// (…/playlist.m3u8?token=…). It must NOT be named "t": the in-app player
+	// reserves "t" for its own timestamp/cache-bust value and overwrites it
+	// (observed: it replaced our token with t=<unix_ms>, producing a 403).
+	return base + "/stream/index.m3u8?token=" + p.sign(rawURL)
 }
 
-// Handler serves GET/OPTIONS /stream/{name}?t=<token>: it verifies the token,
+// Handler serves GET/OPTIONS /stream/{name}?token=<token>: it verifies the token,
 // fetches the upstream resource, and either rewrites it (playlist) or streams it
 // (segment). The path name (index.m3u8 / s.ts) is cosmetic — it only exists so
 // the URL carries an HLS-looking extension for the player.
@@ -90,11 +105,28 @@ func (p *Proxy) Handler() http.HandlerFunc {
 			return
 		}
 
-		raw, ok := p.verify(r.URL.Query().Get("t"))
+		q := r.URL.Query()
+		raw, ok := p.verify(q.Get("token"))
 		if !ok {
+			// A rejected token is worth surfacing loudly: the in-app player mangles
+			// query params (it reserves "t" for its own timestamp), so a 403 here is
+			// the first sign of that class of regression. vsid/vpuid identify the
+			// player session for correlation; the token itself is never logged.
+			p.log.Warn("stream: token rejected",
+				"path", r.URL.Path,
+				"vsid", q.Get("vsid"),
+				"vpuid", q.Get("vpuid"),
+				"ip", httplog.ClientIP(r),
+				"ua", r.UserAgent(),
+			)
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
+		p.log.Debug("stream: serving",
+			"path", r.URL.Path,
+			"vsid", q.Get("vsid"),
+			"vpuid", q.Get("vpuid"),
+		)
 
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, raw, nil)
 		if err != nil {
@@ -194,7 +226,7 @@ func (p *Proxy) rewriteTagURI(line string, base *url.URL) string {
 }
 
 // signResolved resolves a (possibly relative) URI against base and returns a
-// proxied relative reference "<name>?t=<token>", where name carries an
+// proxied relative reference "<name>?token=<token>", where name carries an
 // extension matching the target (p.m3u8 for sub-playlists, s.ts otherwise) so
 // each hop still looks like an HLS resource. On parse failure it returns the URI
 // unchanged. The reference is relative and resolves against the playlist's own
@@ -205,7 +237,7 @@ func (p *Proxy) signResolved(uri string, base *url.URL) string {
 		return uri
 	}
 	abs := base.ResolveReference(ref).String()
-	return proxiedName(abs) + "?t=" + p.sign(abs)
+	return proxiedName(abs) + "?token=" + p.sign(abs)
 }
 
 // proxiedName returns the extension-carrying path segment for a proxied URI: a

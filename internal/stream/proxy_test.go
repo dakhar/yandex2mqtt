@@ -73,7 +73,7 @@ func TestPlaylistRewrite(t *testing.T) {
 	if !strings.HasPrefix(out, "#EXTM3U\n") {
 		t.Fatalf("header not preserved:\n%s", out)
 	}
-	// Every URI (segment + key) must become a proxied "<name>?t=<token>" ref whose
+	// Every URI (segment + key) must become a proxied "<name>?token=<token>" ref whose
 	// token maps back to the resolved absolute upstream URL.
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
@@ -85,8 +85,8 @@ func TestPlaylistRewrite(t *testing.T) {
 			if raw, ok := p.verify(tokParam(uri)); !ok || raw != "http://cam:8080/ipcamera/door/key.bin" {
 				t.Fatalf("key URI not rewritten: %q -> %q ok=%v", line, raw, ok)
 			}
-		default: // a segment ref: s.ts?t=<token>
-			if !strings.HasPrefix(line, "s.ts?t=") {
+		default: // a segment ref: s.ts?token=<token>
+			if !strings.HasPrefix(line, "s.ts?token=") {
 				t.Fatalf("segment ref lacks .ts extension: %q", line)
 			}
 			raw, ok := p.verify(tokParam(line))
@@ -97,13 +97,13 @@ func TestPlaylistRewrite(t *testing.T) {
 	}
 }
 
-// tokParam extracts the ?t=<token> query value from a proxied reference.
+// tokParam extracts the ?token=<token> query value from a proxied reference.
 func tokParam(ref string) string {
 	u, err := url.Parse(ref)
 	if err != nil {
 		return ""
 	}
-	return u.Query().Get("t")
+	return u.Query().Get("token")
 }
 
 // An upstream error page served at a .m3u8 URL must pass through unchanged, not
@@ -122,7 +122,7 @@ func TestHandlerPassesThroughNonPlaylist(t *testing.T) {
 	front := httptest.NewServer(r)
 	defer front.Close()
 
-	resp, err := http.Get(front.URL + "/stream/index.m3u8?t=" + p.sign(upstream.URL+"/dead.m3u8"))
+	resp, err := http.Get(front.URL + "/stream/index.m3u8?token=" + p.sign(upstream.URL+"/dead.m3u8"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,8 +161,8 @@ func TestHandlerProxiesPlaylistAndSegment(t *testing.T) {
 	front := httptest.NewServer(r)
 	defer front.Close()
 
-	// Fetch the proxied playlist (URL carries the .m3u8 extension + ?t= token).
-	playlistURL := front.URL + "/stream/index.m3u8?t=" + p.sign(upstream.URL+"/index.m3u8")
+	// Fetch the proxied playlist (URL carries the .m3u8 extension + ?token= token).
+	playlistURL := front.URL + "/stream/index.m3u8?token=" + p.sign(upstream.URL+"/index.m3u8")
 	resp, err := http.Get(playlistURL)
 	if err != nil {
 		t.Fatal(err)
@@ -176,15 +176,15 @@ func TestHandlerProxiesPlaylistAndSegment(t *testing.T) {
 		t.Fatalf("playlist CORS=%q", got)
 	}
 
-	// The rewritten segment line is a relative "s.ts?t=<token>" ref; resolve it
-	// against the playlist URL (/stream/index.m3u8?t=…).
+	// The rewritten segment line is a relative "s.ts?token=<token>" ref; resolve it
+	// against the playlist URL (/stream/index.m3u8?token=…).
 	var segRef string
 	for _, line := range strings.Split(string(body), "\n") {
 		if line != "" && !strings.HasPrefix(line, "#") {
 			segRef = strings.TrimSpace(line)
 		}
 	}
-	if !strings.HasPrefix(segRef, "s.ts?t=") {
+	if !strings.HasPrefix(segRef, "s.ts?token=") {
 		t.Fatalf("segment ref not a .ts URL: %q\n%s", segRef, body)
 	}
 
