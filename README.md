@@ -89,6 +89,7 @@ DB value falls back to the environment.
 | `OPENHAB_TOKEN` / `OPENHAB_TOKEN_FILE` | openHAB API token (file preferred) | — |
 | `WEB_PORT` | listen port | `80` |
 | `WEB_BEHIND_PROXY` | serve plain HTTP behind a TLS proxy | `false` |
+| `PUBLIC_URL` | external base for the video_stream proxy link (set if the proxy doesn't preserve `Host`) | request `Host` |
 | `WEB_TLS_CERT`, `WEB_TLS_KEY` | own TLS (when not behind a proxy) | — |
 | `YANDEX_SKILL_ID`, `YANDEX_OAUTH_TOKEN`, `YANDEX_USER_ID` | proactive callbacks | — |
 | `DB_PATH` | SQLite path | `./data/yandex2mqtt.db` |

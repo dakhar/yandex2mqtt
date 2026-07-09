@@ -35,35 +35,43 @@ const (
 type Proxy struct {
 	key    []byte
 	ttl    time.Duration
+	base   string // configured public base (no trailing slash); "" = derive from request
 	client *http.Client
 }
 
 // New builds a Proxy. secret keys the HMAC that authenticates tokens (reuse the
-// session secret); ttl bounds how long a signed URL stays valid.
-func New(secret string, ttl time.Duration) *Proxy {
+// session secret); ttl bounds how long a signed URL stays valid. base, when
+// non-empty, is the external base URL (e.g. https://yahome.bels.pw) used for the
+// public link instead of the request Host — robust to Host-mangling proxies.
+func New(secret string, ttl time.Duration, base string) *Proxy {
 	sum := sha256.Sum256([]byte(secret))
 	return &Proxy{
 		key:    sum[:],
 		ttl:    ttl,
+		base:   strings.TrimRight(base, "/"),
 		client: &http.Client{Timeout: fetchTimeout},
 	}
 }
 
 // PublicURL turns a raw (locally reachable) HLS URL into an absolute, public
-// proxied URL derived from the inbound request's forwarded host/scheme. This is
-// what get_stream returns to Yandex.
+// proxied URL. It uses the configured base if set, else derives scheme/host from
+// the inbound request's forwarded headers. This is what get_stream returns.
 func (p *Proxy) PublicURL(r *http.Request, rawURL string) string {
-	scheme := "https"
-	if v := r.Header.Get("X-Forwarded-Proto"); v != "" {
-		scheme = v
-	} else if r.TLS != nil {
-		scheme = "https"
+	base := p.base
+	if base == "" {
+		scheme := "https"
+		if v := r.Header.Get("X-Forwarded-Proto"); v != "" {
+			scheme = v
+		} else if r.TLS != nil {
+			scheme = "https"
+		}
+		host := r.Host
+		if v := r.Header.Get("X-Forwarded-Host"); v != "" {
+			host = v
+		}
+		base = scheme + "://" + host
 	}
-	host := r.Host
-	if v := r.Header.Get("X-Forwarded-Host"); v != "" {
-		host = v
-	}
-	return scheme + "://" + host + "/stream/" + p.sign(rawURL)
+	return base + "/stream/" + p.sign(rawURL)
 }
 
 // Handler serves GET/OPTIONS /stream/{token}: it verifies the token, fetches the

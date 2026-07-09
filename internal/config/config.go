@@ -49,6 +49,11 @@ type Web struct {
 	TLSKey      string `env:"WEB_TLS_KEY"`
 	TLSCert     string `env:"WEB_TLS_CERT"`
 	BehindProxy bool   `env:"WEB_BEHIND_PROXY" envDefault:"false"`
+	// PublicURL is the externally reachable base (e.g. https://yahome.bels.pw).
+	// When set, it's used to build absolute URLs (the video_stream proxy link)
+	// instead of the request's Host header — robust to reverse proxies that don't
+	// preserve Host.
+	PublicURL string `env:"PUBLIC_URL"`
 }
 
 // Session holds the cookie session secret (replaces the hardcoded value).

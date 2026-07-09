@@ -175,7 +175,7 @@ func run() error {
 	// HLS proxy: get_stream returns a signed public URL routed through /stream,
 	// so Alice's player reaches a camera's local HLS (CORS + reachability) with
 	// no transcoding on our side.
-	streamProxy := stream.New(cfg.Session.Secret, time.Hour)
+	streamProxy := stream.New(cfg.Session.Secret, time.Hour, cfg.Web.PublicURL)
 	api.SetStreamRewriter(streamProxy.PublicURL)
 
 	board := web.New(store.NewRoomRepo(db), catalog, manager, logger)

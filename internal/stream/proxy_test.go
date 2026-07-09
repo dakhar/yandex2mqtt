@@ -13,7 +13,7 @@ import (
 )
 
 func TestSignVerifyRoundTrip(t *testing.T) {
-	p := New("secret", time.Hour)
+	p := New("secret", time.Hour, "")
 	tok := p.sign("http://cam/door/index.m3u8")
 	got, ok := p.verify(tok)
 	if !ok || got != "http://cam/door/index.m3u8" {
@@ -22,7 +22,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 }
 
 func TestVerifyRejectsTamperAndExpiry(t *testing.T) {
-	p := New("secret", time.Hour)
+	p := New("secret", time.Hour, "")
 	tok := p.sign("http://cam/x.m3u8")
 
 	// Flip a byte in the signature part.
@@ -33,19 +33,35 @@ func TestVerifyRejectsTamperAndExpiry(t *testing.T) {
 	}
 
 	// Wrong key must not verify.
-	if _, ok := New("other", time.Hour).verify(tok); ok {
+	if _, ok := New("other", time.Hour, "").verify(tok); ok {
 		t.Fatal("token verified under a different key")
 	}
 
 	// Already-expired token.
-	exp := New("secret", -time.Minute)
+	exp := New("secret", -time.Minute, "")
 	if _, ok := p.verify(exp.sign("http://cam/x.m3u8")); ok {
 		t.Fatal("expired token verified")
 	}
 }
 
+// PublicURL uses the configured base (ignoring a Host-mangling proxy) when set,
+// and falls back to the request's forwarded host otherwise.
+func TestPublicURLBase(t *testing.T) {
+	req := httptest.NewRequest("POST", "http://10.0.0.5:8080/provider", nil)
+	req.Host = "10.0.0.5:8080" // proxy forwarded an internal Host
+
+	withBase := New("secret", time.Hour, "https://yahome.bels.pw/")
+	if got := withBase.PublicURL(req, "http://cam/x.m3u8"); !strings.HasPrefix(got, "https://yahome.bels.pw/stream/") {
+		t.Fatalf("configured base ignored: %q", got)
+	}
+	noBase := New("secret", time.Hour, "")
+	if got := noBase.PublicURL(req, "http://cam/x.m3u8"); !strings.HasPrefix(got, "https://10.0.0.5:8080/stream/") {
+		t.Fatalf("fallback host wrong: %q", got)
+	}
+}
+
 func TestPlaylistRewrite(t *testing.T) {
-	p := New("secret", time.Hour)
+	p := New("secret", time.Hour, "")
 	base, _ := url.Parse("http://cam:8080/ipcamera/door/index.m3u8")
 	in := "#EXTM3U\n" +
 		"#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"\n" +
@@ -97,7 +113,7 @@ func TestHandlerProxiesPlaylistAndSegment(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	p := New("secret", time.Hour)
+	p := New("secret", time.Hour, "")
 	r := chi.NewRouter()
 	r.HandleFunc("/stream/{token}", p.Handler())
 	front := httptest.NewServer(r)
