@@ -244,3 +244,35 @@ func TestHandlerStreamsMJPEG(t *testing.T) {
 		t.Fatalf("mjpeg body not streamed through: %q", body)
 	}
 }
+
+// The CORS Access-Control-Allow-Origin must ECHO the request's Origin: Alice's
+// hls.js fetches the manifest in CORS mode from a Yandex origin that varies
+// (observed https://yandex.ru), and a mismatched header makes the browser block
+// it from reading the response — video never starts.
+func TestHandlerEchoesOrigin(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-mpegURL")
+		io.WriteString(w, "#EXTM3U\n#EXTINF:2.0,\nseg0.ts\n")
+	}))
+	defer upstream.Close()
+
+	p := New("secret", time.Hour, "")
+	r := chi.NewRouter()
+	r.HandleFunc("/stream/{name}", p.Handler())
+	front := httptest.NewServer(r)
+	defer front.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, front.URL+"/stream/index.m3u8?token="+p.sign(upstream.URL+"/index.m3u8"), nil)
+	req.Header.Set("Origin", "https://yandex.ru")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://yandex.ru" {
+		t.Fatalf("ACAO = %q, want echoed https://yandex.ru", got)
+	}
+	if got := resp.Header.Get("Vary"); got != "Origin" {
+		t.Fatalf("Vary = %q", got)
+	}
+}

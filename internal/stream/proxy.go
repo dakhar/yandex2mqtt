@@ -1,6 +1,6 @@
 // Package stream implements a thin HLS reverse proxy so Alice's in-app player
-// (which fetches stream_url directly, from the yastatic.net origin) can reach a
-// camera's local HLS playlist. It does no transcoding: it fetches the upstream
+// (hls.js, which fetches stream_url directly from a Yandex origin, e.g.
+// https://yandex.ru) can reach a camera's local HLS playlist. It does no transcoding: it fetches the upstream
 // .m3u8, rewrites segment/variant URIs to signed short-lived tokens routed back
 // through us, and injects the CORS + MIME headers Yandex requires. Segment
 // requests pass through verbatim (byte-for-byte, Range-aware).
@@ -23,9 +23,23 @@ import (
 	"github.com/dakhar/yandex2mqtt/internal/httplog"
 )
 
-// corsOrigin is the origin Alice's HLS player runs on; it must be allowed or the
-// browser blocks the cross-origin playlist/segment fetches.
+// corsOrigin is the fallback Access-Control-Allow-Origin when a request carries
+// no Origin header; normally we echo the request's Origin (see allowedOrigin).
 const corsOrigin = "https://yastatic.net"
+
+// allowedOrigin returns the value for Access-Control-Allow-Origin: the request's
+// own Origin, echoed back. Alice's player (hls.js) fetches the manifest and
+// segments in CORS mode from a Yandex origin that varies (observed
+// https://yandex.ru — NOT the documented yastatic.net), and the browser blocks
+// hls.js from reading the response unless this header matches the requesting
+// origin exactly. Access is gated by the signed short-lived token, so reflecting
+// the origin is safe. Falls back to corsOrigin when Origin is absent.
+func allowedOrigin(r *http.Request) string {
+	if o := r.Header.Get("Origin"); o != "" {
+		return o
+	}
+	return corsOrigin
+}
 
 const (
 	maxPlaylist  = 2 << 20 // cap a rewritten playlist at 2 MiB
@@ -112,7 +126,8 @@ func (p *Proxy) PublicURL(r *http.Request, rawURL, protocol string) string {
 // the URL carries an HLS-looking extension for the player.
 func (p *Proxy) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", corsOrigin)
+		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin(r))
+		w.Header().Set("Vary", "Origin")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Range")
 		if r.Method == http.MethodOptions {
